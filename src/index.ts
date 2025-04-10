@@ -6,6 +6,12 @@
 
 import * as cheerio from 'cheerio';
 
+// 環境変数インターフェースに IS_DEVELOPMENT フラグを追加
+interface Environment {
+	DB: D1Database;
+	IS_DEVELOPMENT?: boolean;
+}
+
 interface ArticleURL {
 	url: string;
 	title: string;
@@ -44,8 +50,24 @@ interface DateRangeBatchScrapeResult {
 }
 
 export default {
-	async fetch(request: Request, environment: Env): Promise<Response> {
+	async fetch(request: Request, environment: Environment): Promise<Response> {
 		const url = new URL(request.url);
+
+		// 開発環境以外ではスクレイピングエンドポイントへのアクセスを制限
+		const isScrapingEndpoint =
+			url.pathname === '/scrape' ||
+			url.pathname === '/scrape-historical' ||
+			url.pathname === '/scrape-historical-batch' ||
+			url.pathname.match(/^\/scrape\/date\/\d{4}$/) ||
+			url.pathname === '/scrape/date-range';
+
+		// 本番環境でスクレイピングエンドポイントにアクセスした場合は403を返す
+		if (isScrapingEndpoint && !environment.IS_DEVELOPMENT) {
+			return new Response(JSON.stringify({ error: 'Scraping endpoints are only available in development environment' }), {
+				status: 403,
+				headers: { 'Content-Type': 'application/json' },
+			});
+		}
 
 		// 手動でスクレイピングを実行するエンドポイント
 		if (url.pathname === '/scrape') {
@@ -420,7 +442,7 @@ export default {
 	},
 
 	// スケジュールされたジョブ
-	async scheduled(controller: ScheduledController, environment: Env): Promise<void> {
+	async scheduled(controller: ScheduledController, environment: Environment): Promise<void> {
 		console.log(`スクレイピング実行: ${controller.cron}`);
 
 		try {
@@ -432,12 +454,12 @@ export default {
 			console.error(`スクレイピングエラー: ${errorMessage}`);
 		}
 	},
-} satisfies ExportedHandler<Env>;
+} satisfies ExportedHandler<Environment>;
 
 /**
  * anond.hatelabo.jpからURLをスクレイピングする
  */
-async function scrapeAnondUrls(environment: Env): Promise<ScrapeResult> {
+async function scrapeAnondUrls(environment: Environment): Promise<ScrapeResult> {
 	// 開始ページ
 	const startUrl = 'https://anond.hatelabo.jp/';
 	return await scrapeAnondUrlsRecursive(environment, startUrl);
@@ -446,7 +468,7 @@ async function scrapeAnondUrls(environment: Env): Promise<ScrapeResult> {
 /**
  * 特定日付のanond.hatelabo.jp/YYYYMMDD からURLをスクレイピングする
  */
-async function scrapeHistoricalAnondUrls(environment: Env, date: string): Promise<HistoricalScrapeResult> {
+async function scrapeHistoricalAnondUrls(environment: Environment, date: string): Promise<HistoricalScrapeResult> {
 	// 日付フォーマットに対応したURL
 	const startUrl = `https://anond.hatelabo.jp/${date}`;
 	const baseResult = await scrapeAnondUrlsRecursive(environment, startUrl);
@@ -461,7 +483,7 @@ async function scrapeHistoricalAnondUrls(environment: Env, date: string): Promis
  * 日付の範囲を指定して複数日の過去記事をバッチでスクレイピングする
  */
 async function batchScrapeHistoricalAnondUrls(
-	environment: Env,
+	environment: Environment,
 	startDate: string,
 	endDate: string,
 	maxDays: number | undefined,
@@ -549,7 +571,7 @@ function formatDateToString(date: Date): string {
  * 再帰的にページをスクレイピングする
  */
 async function scrapeAnondUrlsRecursive(
-	environment: Env,
+	environment: Environment,
 	pageUrl: string,
 	maxPages: number | undefined = undefined,
 ): Promise<ScrapeResult> {
