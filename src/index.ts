@@ -218,22 +218,47 @@ export default {
 			}
 		}
 
-		// ルートURL: 同じ月日の過去記事へリダイレクト
+		// ルートURL: 日付に基づいてランダムな過去記事へリダイレクト
 		if (url.pathname === '/') {
 			try {
 				const now = new Date();
 				const month = String(now.getMonth() + 1).padStart(2, '0'); // 01-12
 				const day = String(now.getDate()).padStart(2, '0'); // 01-31
-				const currentYear = String(now.getFullYear()); // YYYY
+				const currentYear = now.getFullYear(); // YYYY (as number)
 				const currentMonthDay = `${month}${day}`; // Month and Day (e.g., 0410)
 
+				// Determine the start year based on the current date
+				let startYear: number;
+				const monthNum = now.getMonth() + 1; // 1-12
+				const dayNum = now.getDate(); // 1-31
+
+				if (monthNum > 9 || (monthNum === 9 && dayNum >= 24)) {
+					startYear = 2006;
+				} else {
+					startYear = 2007;
+				}
+
+				// Determine the end year (last year)
+				const endYear = currentYear - 1;
+
+				// Check if there are any valid past years to select from
+				if (startYear > endYear) {
+					return new Response('No valid past years found for this date.', { status: 404 });
+				}
+
+				// Select a random year between startYear and endYear (inclusive)
+				const numberOfYears = endYear - startYear + 1;
+				const randomYear = Math.floor(Math.random() * numberOfYears) + startYear;
+				const randomYearStr = String(randomYear);
+
+				// Fetch a random article from that specific year and month/day
 				const stmt = environment.DB.prepare(
 					`SELECT url FROM article_urls
-					 WHERE substr(url, 31, 4) = ?1 -- Check MonthDay from URL path (position 31)
-					 AND substr(url, 27, 4) != ?2 -- Check Year from URL path (position 27)
+					 WHERE substr(url, 27, 4) = ?1 -- Check Year from URL path (position 27)
+					   AND substr(url, 31, 4) = ?2 -- Check MonthDay from URL path (position 31)
 					 ORDER BY RANDOM()
 					 LIMIT 1`,
-				).bind(currentMonthDay, currentYear);
+				).bind(randomYearStr, currentMonthDay);
 
 				const result = await stmt.first<{ url: string }>();
 
