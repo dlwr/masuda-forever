@@ -114,7 +114,8 @@ export default {
 				}
 
 				// 最大処理日数を制限（APIタイムアウト対策）
-				const maxDays = Number.parseInt(url.searchParams.get('maxDays') || '7');
+				const maxDaysParam = url.searchParams.get('maxDays');
+				const maxDays = maxDaysParam ? Number.parseInt(maxDaysParam) : undefined;
 
 				const result = await batchScrapeHistoricalAnondUrls(environment, startDateParameter, endDateParameter, maxDays);
 				return new Response(JSON.stringify(result), {
@@ -193,7 +194,7 @@ async function batchScrapeHistoricalAnondUrls(
 	environment: Env,
 	startDate: string,
 	endDate: string,
-	maxDays: number = 7,
+	maxDays: number | undefined,
 ): Promise<BatchHistoricalScrapeResult> {
 	// 開始日と終了日のDateオブジェクトを作成
 	const startDateObject = parseDateFromString(startDate);
@@ -211,7 +212,9 @@ async function batchScrapeHistoricalAnondUrls(
 	const dates: string[] = [];
 	const currentDate = new Date(startDateObject);
 
-	while (currentDate <= endDateObject && dates.length < maxDays) {
+	const _maxDays = maxDays ?? endDateObject.getTime() - startDateObject.getTime();
+
+	while (currentDate <= endDateObject && dates.length < _maxDays) {
 		dates.push(formatDateToString(currentDate));
 		currentDate.setDate(currentDate.getDate() + 1);
 	}
@@ -354,11 +357,11 @@ async function scrapeAnondUrlsRecursive(environment: Env, pageUrl: string, maxPa
 			}
 		}
 
-		// このページで既存URLと衝突が多かった場合は処理を停止
-		if (pageExistingUrls > 0 && pageNewUrls === 0) {
-			console.log(`既存URLのみを検出したため停止します。`);
-			foundNewUrls = false;
-		}
+		// // このページで既存URLと衝突が多かった場合は処理を停止
+		// if (pageExistingUrls > 0 && pageNewUrls === 0) {
+		// 	console.log(`既存URLのみを検出したため停止します。`);
+		// 	foundNewUrls = false;
+		// }
 
 		// 結果を更新
 		result.existingUrlsCount += pageExistingUrls;
@@ -366,7 +369,9 @@ async function scrapeAnondUrlsRecursive(environment: Env, pageUrl: string, maxPa
 		pagesProcessed++;
 
 		// 次のページURLを取得
-		const nextPageLink = $('.pager-l a').attr('href');
+		const nextPageLink = $('.pager-l a')
+			.filter((_, element) => $(element).text().includes('次'))
+			.attr('href');
 		if (nextPageLink && foundNewUrls) {
 			currentUrl = nextPageLink.startsWith('http') ? nextPageLink : `https://anond.hatelabo.jp${nextPageLink}`;
 			console.log(`次のページに進みます: ${currentUrl}`);
