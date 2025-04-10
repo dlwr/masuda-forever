@@ -21,15 +21,6 @@ interface HistoricalScrapeResult extends ScrapeResult {
 	date: string;
 }
 
-interface BatchHistoricalScrapeResult {
-	results: HistoricalScrapeResult[];
-	totalNewUrls: number;
-	totalExistingUrls: number;
-	totalPagesScrapped: number;
-	datesProcessed: string[];
-	failedDates: Record<string, string>;
-}
-
 interface BatchScrapeByMonthDayResult {
 	results: HistoricalScrapeResult[];
 	totalNewUrls: number;
@@ -136,8 +127,8 @@ export default {
 				}
 
 				// 最大処理日数を制限（APIタイムアウト対策）
-				const maxDaysParam = url.searchParams.get('maxDays');
-				const maxDays = maxDaysParam ? Number.parseInt(maxDaysParam) : undefined;
+				const maxDaysParameter = url.searchParams.get('maxDays');
+				const maxDays = maxDaysParameter ? Number.parseInt(maxDaysParameter) : undefined;
 
 				const result = await batchScrapeHistoricalAnondUrls(environment, startDateParameter, endDateParameter, maxDays);
 				return new Response(JSON.stringify(result), {
@@ -158,8 +149,8 @@ export default {
 			const monthDay = dateScrapeMatch[1]; // MMDD形式
 
 			// MMDD形式の基本的な検証 (例: 0101 - 1231)
-			const month = parseInt(monthDay.substring(0, 2), 10);
-			const day = parseInt(monthDay.substring(2, 4), 10);
+			const month = Number.parseInt(monthDay.slice(0, 2), 10);
+			const day = Number.parseInt(monthDay.slice(2, 4), 10);
 			if (month < 1 || month > 12 || day < 1 || day > 31) {
 				return new Response(JSON.stringify({ error: '無効な月日形式です。MMDD形式で指定してください (例: 0101)。' }), {
 					status: 400,
@@ -181,21 +172,21 @@ export default {
 				};
 
 				for (let year = startYear; year <= endYear; year++) {
-					const yearStr = String(year);
-					const dateStr = `${yearStr}${monthDay}`; // YYYYMMDD
-					console.log(`Scraping for date: ${dateStr}`);
+					const yearString = String(year);
+					const dateString = `${yearString}${monthDay}`; // YYYYMMDD
+					console.log(`Scraping for date: ${dateString}`);
 					try {
-						const result = await scrapeHistoricalAnondUrls(environment, dateStr);
+						const result = await scrapeHistoricalAnondUrls(environment, dateString);
 						response.results.push(result);
 						response.totalNewUrls += result.newUrls.length;
 						response.totalExistingUrls += result.existingUrlsCount;
 						response.totalPagesScrapped += result.pagesScraped;
-						response.yearsProcessed.push(yearStr);
-						console.log(`Completed scraping for ${dateStr}: ${result.newUrls.length} new URLs.`);
+						response.yearsProcessed.push(yearString);
+						console.log(`Completed scraping for ${dateString}: ${result.newUrls.length} new URLs.`);
 					} catch (error: unknown) {
 						const reason = error instanceof Error ? error.message : String(error);
-						response.failedYears[yearStr] = reason;
-						console.error(`Failed scraping for ${dateStr}: ${reason}`);
+						response.failedYears[yearString] = reason;
+						console.error(`Failed scraping for ${dateString}: ${reason}`);
 					}
 
 					// 各年の処理間に待機時間を追加（例: 500ミリ秒）
@@ -245,10 +236,10 @@ export default {
 			}
 
 			// 開始日と終了日の基本的な検証
-			const startMonth = parseInt(startMonthDay.substring(0, 2), 10);
-			const startDay = parseInt(startMonthDay.substring(2, 4), 10);
-			const endMonth = parseInt(endMonthDay.substring(0, 2), 10);
-			const endDay = parseInt(endMonthDay.substring(2, 4), 10);
+			const startMonth = Number.parseInt(startMonthDay.slice(0, 2), 10);
+			const startDay = Number.parseInt(startMonthDay.slice(2, 4), 10);
+			const endMonth = Number.parseInt(endMonthDay.slice(0, 2), 10);
+			const endDay = Number.parseInt(endMonthDay.slice(2, 4), 10);
 
 			if (
 				startMonth < 1 ||
@@ -306,21 +297,21 @@ export default {
 
 						// 各年を順番に処理
 						for (let year = startYear; year <= endYear; year++) {
-							const yearStr = String(year);
-							const dateStr = `${yearStr}${monthDay}`; // YYYYMMDD
-							console.log(`Scraping for date: ${dateStr}`);
+							const yearString = String(year);
+							const dateString = `${yearString}${monthDay}`; // YYYYMMDD
+							console.log(`Scraping for date: ${dateString}`);
 							try {
-								const result = await scrapeHistoricalAnondUrls(environment, dateStr);
+								const result = await scrapeHistoricalAnondUrls(environment, dateString);
 								dateResult.results.push(result);
 								dateResult.totalNewUrls += result.newUrls.length;
 								dateResult.totalExistingUrls += result.existingUrlsCount;
 								dateResult.totalPagesScrapped += result.pagesScraped;
-								dateResult.yearsProcessed.push(yearStr);
-								console.log(`Completed scraping for ${dateStr}: ${result.newUrls.length} new URLs.`);
+								dateResult.yearsProcessed.push(yearString);
+								console.log(`Completed scraping for ${dateString}: ${result.newUrls.length} new URLs.`);
 							} catch (error: unknown) {
 								const reason = error instanceof Error ? error.message : String(error);
-								dateResult.failedYears[yearStr] = reason;
-								console.error(`Failed scraping for ${dateStr}: ${reason}`);
+								dateResult.failedYears[yearString] = reason;
+								console.error(`Failed scraping for ${dateString}: ${reason}`);
 							}
 
 							// 各年の処理間に待機時間を追加（例: 500ミリ秒）
@@ -383,15 +374,10 @@ export default {
 				const currentMonthDay = `${month}${day}`; // Month and Day (e.g., 0410)
 
 				// Determine the start year based on the current date
-				let startYear: number;
-				const monthNum = now.getMonth() + 1; // 1-12
-				const dayNum = now.getDate(); // 1-31
+				const monthNumber = now.getMonth() + 1; // 1-12
+				const dayNumber = now.getDate(); // 1-31
 
-				if (monthNum > 9 || (monthNum === 9 && dayNum >= 24)) {
-					startYear = 2006;
-				} else {
-					startYear = 2007;
-				}
+				const startYear = monthNumber > 9 || (monthNumber === 9 && dayNumber >= 24) ? 2006 : 2007;
 
 				// Determine the end year (last year)
 				const endYear = currentYear - 1;
@@ -404,7 +390,7 @@ export default {
 				// Select a random year between startYear and endYear (inclusive)
 				const numberOfYears = endYear - startYear + 1;
 				const randomYear = Math.floor(Math.random() * numberOfYears) + startYear;
-				const randomYearStr = String(randomYear);
+				const randomYearString = String(randomYear);
 
 				// Fetch a random article from that specific year and month/day
 				const stmt = environment.DB.prepare(
@@ -413,15 +399,13 @@ export default {
 					   AND substr(url, 31, 4) = ?2 -- Check MonthDay from URL path (position 31)
 					 ORDER BY RANDOM()
 					 LIMIT 1`,
-				).bind(randomYearStr, currentMonthDay);
+				).bind(randomYearString, currentMonthDay);
 
 				const result = await stmt.first<{ url: string }>();
 
-				if (result && result.url) {
-					return Response.redirect(result.url, 302);
-				} else {
-					return new Response('No matching historical article found for this date.', { status: 404 });
-				}
+				return result && result.url
+					? Response.redirect(result.url, 302)
+					: new Response('No matching historical article found for this date.', { status: 404 });
 			} catch (error: unknown) {
 				console.error('Error handling root path redirect:', error);
 				const errorMessage = error instanceof Error ? error.message : String(error);
@@ -577,7 +561,7 @@ async function scrapeAnondUrlsRecursive(
 
 	let currentUrl = pageUrl;
 	let pagesProcessed = 0;
-	let foundNewUrls = true;
+	const foundNewUrls = true;
 
 	// 最大ページ数まで、または新しいURLが見つからなくなるまでスクレイピング
 	while (currentUrl && (!maxPages || pagesProcessed < maxPages) && foundNewUrls) {
@@ -608,7 +592,6 @@ async function scrapeAnondUrlsRecursive(
 
 		// 既存URLのカウンターと新規URLのフラグ
 		let pageExistingUrls = 0;
-		let pageNewUrls = 0;
 
 		// 新しいURLのみをデータベースに保存
 		for (const article of pageArticles) {
@@ -625,7 +608,6 @@ async function scrapeAnondUrlsRecursive(
 					await environment.DB.prepare('INSERT INTO article_urls (url, title) VALUES (?, ?)').bind(article.url, article.title).run();
 
 					result.newUrls.push(article);
-					pageNewUrls++;
 					console.log(`新規URL保存: ${article.url}`);
 				}
 			} catch (error: unknown) {
@@ -667,10 +649,10 @@ async function scrapeAnondUrlsRecursive(
 function generateMonthDaysBetween(startMonthDay: string, endMonthDay: string): string[] {
 	// 基準年を設定（うるう年を考慮して2024年を使用）
 	const baseYear = 2024;
-	const startMonth = parseInt(startMonthDay.substring(0, 2), 10);
-	const startDay = parseInt(startMonthDay.substring(2, 4), 10);
-	const endMonth = parseInt(endMonthDay.substring(0, 2), 10);
-	const endDay = parseInt(endMonthDay.substring(2, 4), 10);
+	const startMonth = Number.parseInt(startMonthDay.slice(0, 2), 10);
+	const startDay = Number.parseInt(startMonthDay.slice(2, 4), 10);
+	const endMonth = Number.parseInt(endMonthDay.slice(0, 2), 10);
+	const endDay = Number.parseInt(endMonthDay.slice(2, 4), 10);
 
 	const startDate = new Date(baseYear, startMonth - 1, startDay);
 	const endDate = new Date(baseYear, endMonth - 1, endDay);
