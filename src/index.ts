@@ -17,6 +17,19 @@ interface ScrapeResult {
 	pagesScraped: number;
 }
 
+interface HistoricalScrapeResult extends ScrapeResult {
+	date: string;
+}
+
+interface BatchHistoricalScrapeResult {
+	results: HistoricalScrapeResult[];
+	totalNewUrls: number;
+	totalExistingUrls: number;
+	totalPagesScrapped: number;
+	datesProcessed: string[];
+	failedDates: Record<string, string>;
+}
+
 export default {
 	async fetch(req: Request, env: Env): Promise<Response> {
 		const url = new URL(req.url);
@@ -25,6 +38,85 @@ export default {
 		if (url.pathname === '/scrape') {
 			try {
 				const result = await scrapeAnondUrls(env);
+				return new Response(JSON.stringify(result), {
+					headers: { 'Content-Type': 'application/json' },
+				});
+			} catch (error: unknown) {
+				const errorMessage = error instanceof Error ? error.message : String(error);
+				return new Response(JSON.stringify({ error: errorMessage }), {
+					status: 500,
+					headers: { 'Content-Type': 'application/json' },
+				});
+			}
+		}
+
+		// 過去記事スクレイピングのエンドポイント
+		if (url.pathname === '/scrape-historical') {
+			try {
+				const dateParam = url.searchParams.get('date');
+				if (!dateParam) {
+					return new Response(JSON.stringify({ error: '日付パラメータが必要です（YYYYMMDD形式）' }), {
+						status: 400,
+						headers: { 'Content-Type': 'application/json' },
+					});
+				}
+
+				const dateRegex = /^\d{8}$/;
+				if (!dateRegex.test(dateParam)) {
+					return new Response(JSON.stringify({ error: '日付はYYYYMMDD形式で指定してください' }), {
+						status: 400,
+						headers: { 'Content-Type': 'application/json' },
+					});
+				}
+
+				const result = await scrapeHistoricalAnondUrls(env, dateParam);
+				return new Response(JSON.stringify(result), {
+					headers: { 'Content-Type': 'application/json' },
+				});
+			} catch (error: unknown) {
+				const errorMessage = error instanceof Error ? error.message : String(error);
+				return new Response(JSON.stringify({ error: errorMessage }), {
+					status: 500,
+					headers: { 'Content-Type': 'application/json' },
+				});
+			}
+		}
+
+		// 過去記事バッチスクレイピングのエンドポイント
+		if (url.pathname === '/scrape-historical-batch') {
+			try {
+				const startDateParam = url.searchParams.get('startDate');
+				const endDateParam = url.searchParams.get('endDate');
+
+				if (!startDateParam || !endDateParam) {
+					return new Response(
+						JSON.stringify({
+							error: '開始日(startDate)と終了日(endDate)のパラメータが必要です（YYYYMMDD形式）',
+						}),
+						{
+							status: 400,
+							headers: { 'Content-Type': 'application/json' },
+						}
+					);
+				}
+
+				const dateRegex = /^\d{8}$/;
+				if (!dateRegex.test(startDateParam) || !dateRegex.test(endDateParam)) {
+					return new Response(
+						JSON.stringify({
+							error: '日付はYYYYMMDD形式で指定してください',
+						}),
+						{
+							status: 400,
+							headers: { 'Content-Type': 'application/json' },
+						}
+					);
+				}
+
+				// 最大処理日数を制限（APIタイムアウト対策）
+				const maxDays = parseInt(url.searchParams.get('maxDays') || '7');
+
+				const result = await batchScrapeHistoricalAnondUrls(env, startDateParam, endDateParam, maxDays);
 				return new Response(JSON.stringify(result), {
 					headers: { 'Content-Type': 'application/json' },
 				});
@@ -62,8 +154,30 @@ export default {
 		console.log(`スクレイピング実行: ${controller.cron}`);
 
 		try {
+			// 通常のスクレイピング
 			const result = await scrapeAnondUrls(env);
 			console.log(`スクレイピング完了: ${result.newUrls.length}件の新規URL追加、${result.pagesScraped}ページ処理`);
+
+			// 毎日1回、過去記事もスクレイピング（例: 毎日1時に実行されるcronの場合）
+			const now = new Date();
+			const cronParts = controller.cron.split(' ');
+
+			// cronの形式が "X * * * *" の場合（X時間ごと）に実行
+			if (cronParts[1] === '*' && cronParts[2] === '*' && cronParts[3] === '*') {
+				// 過去の日付（7日前）を取得
+				const pastDate = new Date();
+				pastDate.setDate(now.getDate() - 7);
+				const dateStr = formatDateToString(pastDate);
+
+				console.log(`過去記事のスクレイピングを開始: ${dateStr}`);
+				try {
+					const historicalResult = await scrapeHistoricalAnondUrls(env, dateStr);
+					console.log(`過去記事のスクレイピング完了: ${historicalResult.newUrls.length}件の新規URL追加、${historicalResult.date}日付処理`);
+				} catch (error: unknown) {
+					const errorMessage = error instanceof Error ? error.message : String(error);
+					console.error(`過去記事のスクレイピングエラー: ${errorMessage}`);
+				}
+			}
 		} catch (error: unknown) {
 			const errorMessage = error instanceof Error ? error.message : String(error);
 			console.error(`スクレイピングエラー: ${errorMessage}`);
@@ -78,6 +192,119 @@ async function scrapeAnondUrls(env: Env): Promise<ScrapeResult> {
 	// 開始ページ
 	const startUrl = 'https://anond.hatelabo.jp/';
 	return await scrapeAnondUrlsRecursive(env, startUrl);
+}
+
+/**
+ * 特定日付のanond.hatelabo.jp/YYYYMMDD からURLをスクレイピングする
+ */
+async function scrapeHistoricalAnondUrls(env: Env, date: string): Promise<HistoricalScrapeResult> {
+	// 日付フォーマットに対応したURL
+	const startUrl = `https://anond.hatelabo.jp/${date}`;
+	const baseResult = await scrapeAnondUrlsRecursive(env, startUrl);
+
+	return {
+		...baseResult,
+		date,
+	};
+}
+
+/**
+ * 日付の範囲を指定して複数日の過去記事をバッチでスクレイピングする
+ */
+async function batchScrapeHistoricalAnondUrls(
+	env: Env,
+	startDate: string,
+	endDate: string,
+	maxDays: number = 7
+): Promise<BatchHistoricalScrapeResult> {
+	// 開始日と終了日のDateオブジェクトを作成
+	const startDateObj = parseDateFromString(startDate);
+	const endDateObj = parseDateFromString(endDate);
+
+	if (!startDateObj || !endDateObj) {
+		throw new Error('開始日または終了日のパースに失敗しました');
+	}
+
+	if (startDateObj > endDateObj) {
+		throw new Error('開始日は終了日より前の日付を指定してください');
+	}
+
+	// 日付の配列を作成
+	const dates: string[] = [];
+	const currentDate = new Date(startDateObj);
+
+	while (currentDate <= endDateObj && dates.length < maxDays) {
+		dates.push(formatDateToString(currentDate));
+		currentDate.setDate(currentDate.getDate() + 1);
+	}
+
+	console.log(`バッチスクレイピング: ${dates.length}日分の処理を開始します`);
+
+	const results: HistoricalScrapeResult[] = [];
+	const failedDates: Record<string, string> = {};
+
+	// 各日付に対してスクレイピングを実行
+	for (const date of dates) {
+		try {
+			console.log(`日付 ${date} のスクレイピングを開始`);
+			const result = await scrapeHistoricalAnondUrls(env, date);
+			results.push(result);
+			console.log(`日付 ${date} のスクレイピング完了: ${result.newUrls.length}件の新規URL`);
+		} catch (error: unknown) {
+			const errorMessage = error instanceof Error ? error.message : String(error);
+			console.error(`日付 ${date} のスクレイピングエラー: ${errorMessage}`);
+			failedDates[date] = errorMessage;
+		}
+
+		// APIリクエスト過多を避けるため、各リクエスト間に少し待機
+		await new Promise((resolve) => setTimeout(resolve, 500));
+	}
+
+	// 結果を集計
+	const batchResult: BatchHistoricalScrapeResult = {
+		results,
+		totalNewUrls: results.reduce((sum, result) => sum + result.newUrls.length, 0),
+		totalExistingUrls: results.reduce((sum, result) => sum + result.existingUrlsCount, 0),
+		totalPagesScrapped: results.reduce((sum, result) => sum + result.pagesScraped, 0),
+		datesProcessed: results.map((result) => result.date),
+		failedDates,
+	};
+
+	return batchResult;
+}
+
+/**
+ * YYYYMMDD形式の文字列からDateオブジェクトを作成
+ */
+function parseDateFromString(dateStr: string): Date | null {
+	// YYYYMMDD形式をYYYY-MM-DDに変換
+	if (!/^\d{8}$/.test(dateStr)) {
+		return null;
+	}
+
+	const year = parseInt(dateStr.substring(0, 4));
+	const month = parseInt(dateStr.substring(4, 6)) - 1; // JavaScriptの月は0始まり
+	const day = parseInt(dateStr.substring(6, 8));
+
+	const date = new Date(year, month, day);
+
+	// 日付が有効かチェック
+	if (isNaN(date.getTime())) {
+		return null;
+	}
+
+	return date;
+}
+
+/**
+ * DateオブジェクトをYYYYMMDD形式の文字列に変換
+ */
+function formatDateToString(date: Date): string {
+	const year = date.getFullYear();
+	const month = String(date.getMonth() + 1).padStart(2, '0');
+	const day = String(date.getDate()).padStart(2, '0');
+
+	return `${year}${month}${day}`;
 }
 
 /**
