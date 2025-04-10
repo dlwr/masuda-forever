@@ -30,6 +30,16 @@ interface BatchHistoricalScrapeResult {
 	failedDates: Record<string, string>;
 }
 
+interface BatchScrapeByMonthDayResult {
+	results: HistoricalScrapeResult[];
+	totalNewUrls: number;
+	totalExistingUrls: number;
+	totalPagesScrapped: number;
+	yearsProcessed: string[];
+	failedYears: Record<string, string>;
+	monthDay: string;
+}
+
 export default {
 	async fetch(request: Request, environment: Env): Promise<Response> {
 		const url = new URL(request.url);
@@ -119,6 +129,68 @@ export default {
 
 				const result = await batchScrapeHistoricalAnondUrls(environment, startDateParameter, endDateParameter, maxDays);
 				return new Response(JSON.stringify(result), {
+					headers: { 'Content-Type': 'application/json' },
+				});
+			} catch (error: unknown) {
+				const errorMessage = error instanceof Error ? error.message : String(error);
+				return new Response(JSON.stringify({ error: errorMessage }), {
+					status: 500,
+					headers: { 'Content-Type': 'application/json' },
+				});
+			}
+		}
+
+		// 新しいエンドポイント: 指定された月日の複数年スクレイピング
+		const dateScrapeMatch = url.pathname.match(/^\/scrape\/date\/(\d{4})$/);
+		if (dateScrapeMatch) {
+			const monthDay = dateScrapeMatch[1]; // MMDD形式
+
+			// MMDD形式の基本的な検証 (例: 0101 - 1231)
+			const month = parseInt(monthDay.substring(0, 2), 10);
+			const day = parseInt(monthDay.substring(2, 4), 10);
+			if (month < 1 || month > 12 || day < 1 || day > 31) {
+				return new Response(JSON.stringify({ error: '無効な月日形式です。MMDD形式で指定してください (例: 0101)。' }), {
+					status: 400,
+					headers: { 'Content-Type': 'application/json' },
+				});
+			}
+
+			try {
+				const startYear = 2006;
+				const endYear = 2025;
+				const response: BatchScrapeByMonthDayResult = {
+					results: [],
+					totalNewUrls: 0,
+					totalExistingUrls: 0,
+					totalPagesScrapped: 0,
+					yearsProcessed: [],
+					failedYears: {},
+					monthDay: monthDay,
+				};
+
+				for (let year = startYear; year <= endYear; year++) {
+					const yearStr = String(year);
+					const dateStr = `${yearStr}${monthDay}`; // YYYYMMDD
+					console.log(`Scraping for date: ${dateStr}`);
+					try {
+						const result = await scrapeHistoricalAnondUrls(environment, dateStr);
+						response.results.push(result);
+						response.totalNewUrls += result.newUrls.length;
+						response.totalExistingUrls += result.existingUrlsCount;
+						response.totalPagesScrapped += result.pagesScraped;
+						response.yearsProcessed.push(yearStr);
+						console.log(`Completed scraping for ${dateStr}: ${result.newUrls.length} new URLs.`);
+					} catch (error: unknown) {
+						const reason = error instanceof Error ? error.message : String(error);
+						response.failedYears[yearStr] = reason;
+						console.error(`Failed scraping for ${dateStr}: ${reason}`);
+					}
+
+					// 各年の処理間に待機時間を追加（例: 500ミリ秒）
+					await new Promise((resolve) => setTimeout(resolve, 500));
+				}
+
+				return new Response(JSON.stringify(response), {
 					headers: { 'Content-Type': 'application/json' },
 				});
 			} catch (error: unknown) {
