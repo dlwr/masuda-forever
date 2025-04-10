@@ -8,18 +8,18 @@
 	"main": "src/index.ts",
 	"compatibility_date": "2025-04-10",
 	"observability": {
-		"enabled": true
+		"enabled": true,
 	},
 	"triggers": {
-		"crons": ["* * * * *"]
+		"crons": ["* * * * *"],
 	},
 	"d1_databases": [
 		{
 			"binding": "DB",
 			"database_name": "masuda-forever-db",
-			"database_id": "6d9aa237-ec4d-4c0e-b75f-40e55a0c0dde"
-		}
-	]
+			"database_id": "6d9aa237-ec4d-4c0e-b75f-40e55a0c0dde",
+		},
+	],
 	/**
 	 * Smart Placement
 	 * Docs: https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement

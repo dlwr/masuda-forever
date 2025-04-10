@@ -31,13 +31,13 @@ interface BatchHistoricalScrapeResult {
 }
 
 export default {
-	async fetch(req: Request, env: Env): Promise<Response> {
-		const url = new URL(req.url);
+	async fetch(request: Request, environment: Env): Promise<Response> {
+		const url = new URL(request.url);
 
 		// 手動でスクレイピングを実行するエンドポイント
 		if (url.pathname === '/scrape') {
 			try {
-				const result = await scrapeAnondUrls(env);
+				const result = await scrapeAnondUrls(environment);
 				return new Response(JSON.stringify(result), {
 					headers: { 'Content-Type': 'application/json' },
 				});
@@ -53,8 +53,8 @@ export default {
 		// 過去記事スクレイピングのエンドポイント
 		if (url.pathname === '/scrape-historical') {
 			try {
-				const dateParam = url.searchParams.get('date');
-				if (!dateParam) {
+				const dateParameter = url.searchParams.get('date');
+				if (!dateParameter) {
 					return new Response(JSON.stringify({ error: '日付パラメータが必要です（YYYYMMDD形式）' }), {
 						status: 400,
 						headers: { 'Content-Type': 'application/json' },
@@ -62,14 +62,14 @@ export default {
 				}
 
 				const dateRegex = /^\d{8}$/;
-				if (!dateRegex.test(dateParam)) {
+				if (!dateRegex.test(dateParameter)) {
 					return new Response(JSON.stringify({ error: '日付はYYYYMMDD形式で指定してください' }), {
 						status: 400,
 						headers: { 'Content-Type': 'application/json' },
 					});
 				}
 
-				const result = await scrapeHistoricalAnondUrls(env, dateParam);
+				const result = await scrapeHistoricalAnondUrls(environment, dateParameter);
 				return new Response(JSON.stringify(result), {
 					headers: { 'Content-Type': 'application/json' },
 				});
@@ -85,10 +85,10 @@ export default {
 		// 過去記事バッチスクレイピングのエンドポイント
 		if (url.pathname === '/scrape-historical-batch') {
 			try {
-				const startDateParam = url.searchParams.get('startDate');
-				const endDateParam = url.searchParams.get('endDate');
+				const startDateParameter = url.searchParams.get('startDate');
+				const endDateParameter = url.searchParams.get('endDate');
 
-				if (!startDateParam || !endDateParam) {
+				if (!startDateParameter || !endDateParameter) {
 					return new Response(
 						JSON.stringify({
 							error: '開始日(startDate)と終了日(endDate)のパラメータが必要です（YYYYMMDD形式）',
@@ -96,12 +96,12 @@ export default {
 						{
 							status: 400,
 							headers: { 'Content-Type': 'application/json' },
-						}
+						},
 					);
 				}
 
 				const dateRegex = /^\d{8}$/;
-				if (!dateRegex.test(startDateParam) || !dateRegex.test(endDateParam)) {
+				if (!dateRegex.test(startDateParameter) || !dateRegex.test(endDateParameter)) {
 					return new Response(
 						JSON.stringify({
 							error: '日付はYYYYMMDD形式で指定してください',
@@ -109,14 +109,14 @@ export default {
 						{
 							status: 400,
 							headers: { 'Content-Type': 'application/json' },
-						}
+						},
 					);
 				}
 
 				// 最大処理日数を制限（APIタイムアウト対策）
-				const maxDays = parseInt(url.searchParams.get('maxDays') || '7');
+				const maxDays = Number.parseInt(url.searchParams.get('maxDays') || '7');
 
-				const result = await batchScrapeHistoricalAnondUrls(env, startDateParam, endDateParam, maxDays);
+				const result = await batchScrapeHistoricalAnondUrls(environment, startDateParameter, endDateParameter, maxDays);
 				return new Response(JSON.stringify(result), {
 					headers: { 'Content-Type': 'application/json' },
 				});
@@ -131,9 +131,8 @@ export default {
 
 		// スケジュールされたエンドポイントテスト用
 		if (url.pathname === '/__scheduled') {
-			const cron = url.searchParams.get('cron') || '* * * * *';
 			try {
-				const result = await scrapeAnondUrls(env);
+				const result = await scrapeAnondUrls(environment);
 				return new Response(JSON.stringify(result), {
 					headers: { 'Content-Type': 'application/json' },
 				});
@@ -150,34 +149,13 @@ export default {
 	},
 
 	// スケジュールされたジョブ
-	async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+	async scheduled(controller: ScheduledController, environment: Env): Promise<void> {
 		console.log(`スクレイピング実行: ${controller.cron}`);
 
 		try {
 			// 通常のスクレイピング
-			const result = await scrapeAnondUrls(env);
+			const result = await scrapeAnondUrls(environment);
 			console.log(`スクレイピング完了: ${result.newUrls.length}件の新規URL追加、${result.pagesScraped}ページ処理`);
-
-			// 毎日1回、過去記事もスクレイピング（例: 毎日1時に実行されるcronの場合）
-			const now = new Date();
-			const cronParts = controller.cron.split(' ');
-
-			// cronの形式が "X * * * *" の場合（X時間ごと）に実行
-			if (cronParts[1] === '*' && cronParts[2] === '*' && cronParts[3] === '*') {
-				// 過去の日付（7日前）を取得
-				const pastDate = new Date();
-				pastDate.setDate(now.getDate() - 7);
-				const dateStr = formatDateToString(pastDate);
-
-				console.log(`過去記事のスクレイピングを開始: ${dateStr}`);
-				try {
-					const historicalResult = await scrapeHistoricalAnondUrls(env, dateStr);
-					console.log(`過去記事のスクレイピング完了: ${historicalResult.newUrls.length}件の新規URL追加、${historicalResult.date}日付処理`);
-				} catch (error: unknown) {
-					const errorMessage = error instanceof Error ? error.message : String(error);
-					console.error(`過去記事のスクレイピングエラー: ${errorMessage}`);
-				}
-			}
 		} catch (error: unknown) {
 			const errorMessage = error instanceof Error ? error.message : String(error);
 			console.error(`スクレイピングエラー: ${errorMessage}`);
@@ -188,19 +166,19 @@ export default {
 /**
  * anond.hatelabo.jpからURLをスクレイピングする
  */
-async function scrapeAnondUrls(env: Env): Promise<ScrapeResult> {
+async function scrapeAnondUrls(environment: Env): Promise<ScrapeResult> {
 	// 開始ページ
 	const startUrl = 'https://anond.hatelabo.jp/';
-	return await scrapeAnondUrlsRecursive(env, startUrl);
+	return await scrapeAnondUrlsRecursive(environment, startUrl);
 }
 
 /**
  * 特定日付のanond.hatelabo.jp/YYYYMMDD からURLをスクレイピングする
  */
-async function scrapeHistoricalAnondUrls(env: Env, date: string): Promise<HistoricalScrapeResult> {
+async function scrapeHistoricalAnondUrls(environment: Env, date: string): Promise<HistoricalScrapeResult> {
 	// 日付フォーマットに対応したURL
 	const startUrl = `https://anond.hatelabo.jp/${date}`;
-	const baseResult = await scrapeAnondUrlsRecursive(env, startUrl);
+	const baseResult = await scrapeAnondUrlsRecursive(environment, startUrl);
 
 	return {
 		...baseResult,
@@ -212,28 +190,28 @@ async function scrapeHistoricalAnondUrls(env: Env, date: string): Promise<Histor
  * 日付の範囲を指定して複数日の過去記事をバッチでスクレイピングする
  */
 async function batchScrapeHistoricalAnondUrls(
-	env: Env,
+	environment: Env,
 	startDate: string,
 	endDate: string,
-	maxDays: number = 7
+	maxDays: number = 7,
 ): Promise<BatchHistoricalScrapeResult> {
 	// 開始日と終了日のDateオブジェクトを作成
-	const startDateObj = parseDateFromString(startDate);
-	const endDateObj = parseDateFromString(endDate);
+	const startDateObject = parseDateFromString(startDate);
+	const endDateObject = parseDateFromString(endDate);
 
-	if (!startDateObj || !endDateObj) {
+	if (!startDateObject || !endDateObject) {
 		throw new Error('開始日または終了日のパースに失敗しました');
 	}
 
-	if (startDateObj > endDateObj) {
+	if (startDateObject > endDateObject) {
 		throw new Error('開始日は終了日より前の日付を指定してください');
 	}
 
 	// 日付の配列を作成
 	const dates: string[] = [];
-	const currentDate = new Date(startDateObj);
+	const currentDate = new Date(startDateObject);
 
-	while (currentDate <= endDateObj && dates.length < maxDays) {
+	while (currentDate <= endDateObject && dates.length < maxDays) {
 		dates.push(formatDateToString(currentDate));
 		currentDate.setDate(currentDate.getDate() + 1);
 	}
@@ -247,7 +225,7 @@ async function batchScrapeHistoricalAnondUrls(
 	for (const date of dates) {
 		try {
 			console.log(`日付 ${date} のスクレイピングを開始`);
-			const result = await scrapeHistoricalAnondUrls(env, date);
+			const result = await scrapeHistoricalAnondUrls(environment, date);
 			results.push(result);
 			console.log(`日付 ${date} のスクレイピング完了: ${result.newUrls.length}件の新規URL`);
 		} catch (error: unknown) {
@@ -276,21 +254,21 @@ async function batchScrapeHistoricalAnondUrls(
 /**
  * YYYYMMDD形式の文字列からDateオブジェクトを作成
  */
-function parseDateFromString(dateStr: string): Date | null {
+function parseDateFromString(dateString: string): Date | undefined {
 	// YYYYMMDD形式をYYYY-MM-DDに変換
-	if (!/^\d{8}$/.test(dateStr)) {
-		return null;
+	if (!/^\d{8}$/.test(dateString)) {
+		return undefined;
 	}
 
-	const year = parseInt(dateStr.substring(0, 4));
-	const month = parseInt(dateStr.substring(4, 6)) - 1; // JavaScriptの月は0始まり
-	const day = parseInt(dateStr.substring(6, 8));
+	const year = Number.parseInt(dateString.slice(0, 4));
+	const month = Number.parseInt(dateString.slice(4, 6)) - 1; // JavaScriptの月は0始まり
+	const day = Number.parseInt(dateString.slice(6, 8));
 
 	const date = new Date(year, month, day);
 
 	// 日付が有効かチェック
-	if (isNaN(date.getTime())) {
-		return null;
+	if (Number.isNaN(date.getTime())) {
+		return;
 	}
 
 	return date;
@@ -310,7 +288,7 @@ function formatDateToString(date: Date): string {
 /**
  * 再帰的にページをスクレイピングする
  */
-async function scrapeAnondUrlsRecursive(env: Env, pageUrl: string, maxPages: number = 10): Promise<ScrapeResult> {
+async function scrapeAnondUrlsRecursive(environment: Env, pageUrl: string, maxPages: number = 10): Promise<ScrapeResult> {
 	const result: ScrapeResult = {
 		newUrls: [],
 		existingUrlsCount: 0,
@@ -356,17 +334,19 @@ async function scrapeAnondUrlsRecursive(env: Env, pageUrl: string, maxPages: num
 		for (const article of pageArticles) {
 			try {
 				// URLが既に存在するか確認
-				const existingUrl = await env.DB.prepare('SELECT url FROM article_urls WHERE url = ?').bind(article.url).first<{ url: string }>();
+				const existingUrl = await environment.DB.prepare('SELECT url FROM article_urls WHERE url = ?')
+					.bind(article.url)
+					.first<{ url: string }>();
 
-				if (!existingUrl) {
+				if (existingUrl) {
+					pageExistingUrls++;
+				} else {
 					// 新しいURLを保存
-					await env.DB.prepare('INSERT INTO article_urls (url, title) VALUES (?, ?)').bind(article.url, article.title).run();
+					await environment.DB.prepare('INSERT INTO article_urls (url, title) VALUES (?, ?)').bind(article.url, article.title).run();
 
 					result.newUrls.push(article);
 					pageNewUrls++;
 					console.log(`新規URL保存: ${article.url}`);
-				} else {
-					pageExistingUrls++;
 				}
 			} catch (error: unknown) {
 				const errorMessage = error instanceof Error ? error.message : String(error);
