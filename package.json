@@ -1,5 +1,5 @@
 {
-	"name": "billowing-term-b36d",
+	"name": "masuda-forever",
 	"version": "0.0.0",
 	"private": true,
 	"scripts": {
@@ -12,5 +12,8 @@
 		"@cloudflare/workers-types": "^4.20250410.0",
 		"typescript": "^5.5.2",
 		"wrangler": "^4.9.1"
+	},
+	"dependencies": {
+		"cheerio": "^1.0.0"
 	}
 }
