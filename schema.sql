@@ -6,3 +6,6 @@ CREATE TABLE IF NOT EXISTS article_urls (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   processed BOOLEAN DEFAULT FALSE
 );
+
+-- urlカラムにインデックスを追加
+CREATE INDEX IF NOT EXISTS idx_article_urls_url ON article_urls (url);
