@@ -40,6 +40,18 @@ interface BatchScrapeByMonthDayResult {
 	monthDay: string;
 }
 
+// 日付範囲スクレイピング結果のインターフェース
+interface DateRangeBatchScrapeResult {
+	dateResults: Record<string, BatchScrapeByMonthDayResult>; // key: MMDD, value: その日の結果
+	totalNewUrls: number;
+	totalExistingUrls: number;
+	totalPagesScrapped: number;
+	datesProcessed: string[]; // 処理した日付（MMDD形式）
+	failedDates: Record<string, string>; // 処理に失敗した日付
+	startMonthDay: string; // 開始月日（MMDD）
+	endMonthDay: string; // 終了月日（MMDD）
+}
+
 export default {
 	async fetch(request: Request, environment: Env): Promise<Response> {
 		const url = new URL(request.url);
@@ -188,6 +200,149 @@ export default {
 
 					// 各年の処理間に待機時間を追加（例: 500ミリ秒）
 					await new Promise((resolve) => setTimeout(resolve, 500));
+				}
+
+				return new Response(JSON.stringify(response), {
+					headers: { 'Content-Type': 'application/json' },
+				});
+			} catch (error: unknown) {
+				const errorMessage = error instanceof Error ? error.message : String(error);
+				return new Response(JSON.stringify({ error: errorMessage }), {
+					status: 500,
+					headers: { 'Content-Type': 'application/json' },
+				});
+			}
+		}
+
+		// 新しいエンドポイント: 月日の範囲に対する複数年スクレイピング
+		if (url.pathname === '/scrape/date-range') {
+			const startMonthDay = url.searchParams.get('startDate');
+			const endMonthDay = url.searchParams.get('endDate');
+
+			if (!startMonthDay || !endMonthDay) {
+				return new Response(
+					JSON.stringify({
+						error: '開始日(startDate)と終了日(endDate)のパラメータが必要です（MMDD形式）',
+					}),
+					{
+						status: 400,
+						headers: { 'Content-Type': 'application/json' },
+					},
+				);
+			}
+
+			const monthDayRegex = /^\d{4}$/;
+			if (!monthDayRegex.test(startMonthDay) || !monthDayRegex.test(endMonthDay)) {
+				return new Response(
+					JSON.stringify({
+						error: '日付はMMDD形式で指定してください (例: 0101)',
+					}),
+					{
+						status: 400,
+						headers: { 'Content-Type': 'application/json' },
+					},
+				);
+			}
+
+			// 開始日と終了日の基本的な検証
+			const startMonth = parseInt(startMonthDay.substring(0, 2), 10);
+			const startDay = parseInt(startMonthDay.substring(2, 4), 10);
+			const endMonth = parseInt(endMonthDay.substring(0, 2), 10);
+			const endDay = parseInt(endMonthDay.substring(2, 4), 10);
+
+			if (
+				startMonth < 1 ||
+				startMonth > 12 ||
+				startDay < 1 ||
+				startDay > 31 ||
+				endMonth < 1 ||
+				endMonth > 12 ||
+				endDay < 1 ||
+				endDay > 31
+			) {
+				return new Response(
+					JSON.stringify({
+						error: '無効な月日形式です。MMDD形式で指定してください (例: 0101)。',
+					}),
+					{
+						status: 400,
+						headers: { 'Content-Type': 'application/json' },
+					},
+				);
+			}
+
+			try {
+				// 日付の配列を作成
+				const dates: string[] = generateMonthDaysBetween(startMonthDay, endMonthDay);
+				console.log(`処理する日付範囲: ${dates.join(', ')} (${dates.length}日間)`);
+
+				const response: DateRangeBatchScrapeResult = {
+					dateResults: {},
+					totalNewUrls: 0,
+					totalExistingUrls: 0,
+					totalPagesScrapped: 0,
+					datesProcessed: [],
+					failedDates: {},
+					startMonthDay,
+					endMonthDay,
+				};
+
+				// 各日付に対して順次処理
+				for (const monthDay of dates) {
+					console.log(`日付 ${monthDay} の処理を開始`);
+					try {
+						// 個別の月日に対するスクレイピングロジックを再利用
+						const startYear = 2006;
+						const endYear = 2025;
+						const dateResult: BatchScrapeByMonthDayResult = {
+							results: [],
+							totalNewUrls: 0,
+							totalExistingUrls: 0,
+							totalPagesScrapped: 0,
+							yearsProcessed: [],
+							failedYears: {},
+							monthDay,
+						};
+
+						// 各年を順番に処理
+						for (let year = startYear; year <= endYear; year++) {
+							const yearStr = String(year);
+							const dateStr = `${yearStr}${monthDay}`; // YYYYMMDD
+							console.log(`Scraping for date: ${dateStr}`);
+							try {
+								const result = await scrapeHistoricalAnondUrls(environment, dateStr);
+								dateResult.results.push(result);
+								dateResult.totalNewUrls += result.newUrls.length;
+								dateResult.totalExistingUrls += result.existingUrlsCount;
+								dateResult.totalPagesScrapped += result.pagesScraped;
+								dateResult.yearsProcessed.push(yearStr);
+								console.log(`Completed scraping for ${dateStr}: ${result.newUrls.length} new URLs.`);
+							} catch (error: unknown) {
+								const reason = error instanceof Error ? error.message : String(error);
+								dateResult.failedYears[yearStr] = reason;
+								console.error(`Failed scraping for ${dateStr}: ${reason}`);
+							}
+
+							// 各年の処理間に待機時間を追加（例: 500ミリ秒）
+							await new Promise((resolve) => setTimeout(resolve, 500));
+						}
+
+						// 日付の結果を全体結果に追加
+						response.dateResults[monthDay] = dateResult;
+						response.totalNewUrls += dateResult.totalNewUrls;
+						response.totalExistingUrls += dateResult.totalExistingUrls;
+						response.totalPagesScrapped += dateResult.totalPagesScrapped;
+						response.datesProcessed.push(monthDay);
+
+						console.log(`日付 ${monthDay} の処理完了: ${dateResult.totalNewUrls}件の新規URL追加`);
+					} catch (error: unknown) {
+						const errorMessage = error instanceof Error ? error.message : String(error);
+						response.failedDates[monthDay] = errorMessage;
+						console.error(`日付 ${monthDay} の処理エラー: ${errorMessage}`);
+					}
+
+					// 各日付の処理間に待機時間を追加（例: 1000ミリ秒）
+					await new Promise((resolve) => setTimeout(resolve, 1000));
 				}
 
 				return new Response(JSON.stringify(response), {
@@ -503,4 +658,38 @@ async function scrapeAnondUrlsRecursive(
 	}
 
 	return result;
+}
+
+/**
+ * 開始月日から終了月日までの月日の配列を生成する
+ * 例: 0101から0105までなら ['0101', '0102', '0103', '0104', '0105']
+ */
+function generateMonthDaysBetween(startMonthDay: string, endMonthDay: string): string[] {
+	// 基準年を設定（うるう年を考慮して2024年を使用）
+	const baseYear = 2024;
+	const startMonth = parseInt(startMonthDay.substring(0, 2), 10);
+	const startDay = parseInt(startMonthDay.substring(2, 4), 10);
+	const endMonth = parseInt(endMonthDay.substring(0, 2), 10);
+	const endDay = parseInt(endMonthDay.substring(2, 4), 10);
+
+	const startDate = new Date(baseYear, startMonth - 1, startDay);
+	const endDate = new Date(baseYear, endMonth - 1, endDay);
+
+	// 開始日が終了日より後の場合は、年を跨ぐものとして扱う
+	if (startDate > endDate) {
+		endDate.setFullYear(baseYear + 1);
+	}
+
+	const dates: string[] = [];
+	const currentDate = new Date(startDate);
+
+	while (currentDate <= endDate) {
+		const month = String(currentDate.getMonth() + 1).padStart(2, '0');
+		const day = String(currentDate.getDate()).padStart(2, '0');
+		dates.push(`${month}${day}`);
+
+		currentDate.setDate(currentDate.getDate() + 1);
+	}
+
+	return dates;
 }
