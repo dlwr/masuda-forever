@@ -146,6 +146,40 @@ export default {
 			}
 		}
 
+		// ルートURL: 同じ月日の過去記事へリダイレクト
+		if (url.pathname === '/') {
+			try {
+				const now = new Date();
+				const month = String(now.getMonth() + 1).padStart(2, '0'); // 01-12
+				const day = String(now.getDate()).padStart(2, '0'); // 01-31
+				const currentYear = String(now.getFullYear()); // YYYY
+				const currentMonthDay = `${month}${day}`; // Month and Day (e.g., 0410)
+
+				const stmt = environment.DB.prepare(
+					`SELECT url FROM article_urls
+					 WHERE substr(url, 31, 4) = ?1 -- Check MonthDay from URL path (position 31)
+					 AND substr(url, 27, 4) != ?2 -- Check Year from URL path (position 27)
+					 ORDER BY RANDOM()
+					 LIMIT 1`,
+				).bind(currentMonthDay, currentYear);
+
+				const result = await stmt.first<{ url: string }>();
+
+				if (result && result.url) {
+					return Response.redirect(result.url, 302);
+				} else {
+					return new Response('No matching historical article found for this date.', { status: 404 });
+				}
+			} catch (error: unknown) {
+				console.error('Error handling root path redirect:', error);
+				const errorMessage = error instanceof Error ? error.message : String(error);
+				return new Response(JSON.stringify({ error: `Failed to process redirect: ${errorMessage}` }), {
+					status: 500,
+					headers: { 'Content-Type': 'application/json' },
+				});
+			}
+		}
+
 		return new Response('MasudaForever: anond.hatelabo.jp URL Archiver');
 	},
 
@@ -195,7 +229,7 @@ async function batchScrapeHistoricalAnondUrls(
 	startDate: string,
 	endDate: string,
 	maxDays: number | undefined,
-): Promise<BatchHistoricalScrapeResult> {
+): Promise<string> {
 	// 開始日と終了日のDateオブジェクトを作成
 	const startDateObject = parseDateFromString(startDate);
 	const endDateObject = parseDateFromString(endDate);
@@ -221,7 +255,6 @@ async function batchScrapeHistoricalAnondUrls(
 
 	console.log(`バッチスクレイピング: ${dates.length}日分の処理を開始します`);
 
-	const results: HistoricalScrapeResult[] = [];
 	const failedDates: Record<string, string> = {};
 
 	// 各日付に対してスクレイピングを実行
@@ -229,7 +262,6 @@ async function batchScrapeHistoricalAnondUrls(
 		try {
 			console.log(`日付 ${date} のスクレイピングを開始`);
 			const result = await scrapeHistoricalAnondUrls(environment, date);
-			results.push(result);
 			console.log(`日付 ${date} のスクレイピング完了: ${result.newUrls.length}件の新規URL`);
 		} catch (error: unknown) {
 			const errorMessage = error instanceof Error ? error.message : String(error);
@@ -240,18 +272,7 @@ async function batchScrapeHistoricalAnondUrls(
 		// APIリクエスト過多を避けるため、各リクエスト間に少し待機
 		await new Promise((resolve) => setTimeout(resolve, 500));
 	}
-
-	// 結果を集計
-	const batchResult: BatchHistoricalScrapeResult = {
-		results,
-		totalNewUrls: results.reduce((sum, result) => sum + result.newUrls.length, 0),
-		totalExistingUrls: results.reduce((sum, result) => sum + result.existingUrlsCount, 0),
-		totalPagesScrapped: results.reduce((sum, result) => sum + result.pagesScraped, 0),
-		datesProcessed: results.map((result) => result.date),
-		failedDates,
-	};
-
-	return batchResult;
+	return 'end';
 }
 
 /**
@@ -291,7 +312,11 @@ function formatDateToString(date: Date): string {
 /**
  * 再帰的にページをスクレイピングする
  */
-async function scrapeAnondUrlsRecursive(environment: Env, pageUrl: string, maxPages: number = 10): Promise<ScrapeResult> {
+async function scrapeAnondUrlsRecursive(
+	environment: Env,
+	pageUrl: string,
+	maxPages: number | undefined = undefined,
+): Promise<ScrapeResult> {
 	const result: ScrapeResult = {
 		newUrls: [],
 		existingUrlsCount: 0,
@@ -303,7 +328,7 @@ async function scrapeAnondUrlsRecursive(environment: Env, pageUrl: string, maxPa
 	let foundNewUrls = true;
 
 	// 最大ページ数まで、または新しいURLが見つからなくなるまでスクレイピング
-	while (currentUrl && pagesProcessed < maxPages && foundNewUrls) {
+	while (currentUrl && (!maxPages || pagesProcessed < maxPages) && foundNewUrls) {
 		console.log(`ページをスクレイピング: ${currentUrl}`);
 
 		const response = await fetch(currentUrl);
