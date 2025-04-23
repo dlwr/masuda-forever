@@ -6,12 +6,6 @@
 
 import * as cheerio from 'cheerio';
 
-// 環境変数インターフェースに IS_DEVELOPMENT フラグを追加
-interface Environment {
-	DB: D1Database;
-	IS_DEVELOPMENT?: boolean;
-}
-
 interface ArticleURL {
 	url: string;
 	title: string;
@@ -27,30 +21,8 @@ interface HistoricalScrapeResult extends ScrapeResult {
 	date: string;
 }
 
-interface BatchScrapeByMonthDayResult {
-	results: HistoricalScrapeResult[];
-	totalNewUrls: number;
-	totalExistingUrls: number;
-	totalPagesScrapped: number;
-	yearsProcessed: string[];
-	failedYears: Record<string, string>;
-	monthDay: string;
-}
-
-// 日付範囲スクレイピング結果のインターフェース
-interface DateRangeBatchScrapeResult {
-	dateResults: Record<string, BatchScrapeByMonthDayResult>; // key: MMDD, value: その日の結果
-	totalNewUrls: number;
-	totalExistingUrls: number;
-	totalPagesScrapped: number;
-	datesProcessed: string[]; // 処理した日付（MMDD形式）
-	failedDates: Record<string, string>; // 処理に失敗した日付
-	startMonthDay: string; // 開始月日（MMDD）
-	endMonthDay: string; // 終了月日（MMDD）
-}
-
 export default {
-	async fetch(request: Request, environment: Environment): Promise<Response> {
+	async fetch(request: Request, environment: Env): Promise<Response> {
 		const url = new URL(request.url);
 
 		// 開発環境以外ではスクレイピングエンドポイントへのアクセスを制限
@@ -62,6 +34,7 @@ export default {
 			url.pathname === '/scrape/date-range';
 
 		// 本番環境でスクレイピングエンドポイントにアクセスした場合は403を返す
+		console.log(environment);
 		if (isScrapingEndpoint && !environment.IS_DEVELOPMENT) {
 			return new Response(JSON.stringify({ error: 'Scraping endpoints are only available in development environment' }), {
 				status: 403,
@@ -183,31 +156,15 @@ export default {
 			try {
 				const startYear = 2006;
 				const endYear = 2025;
-				const response: BatchScrapeByMonthDayResult = {
-					results: [],
-					totalNewUrls: 0,
-					totalExistingUrls: 0,
-					totalPagesScrapped: 0,
-					yearsProcessed: [],
-					failedYears: {},
-					monthDay: monthDay,
-				};
-
 				for (let year = startYear; year <= endYear; year++) {
 					const yearString = String(year);
 					const dateString = `${yearString}${monthDay}`; // YYYYMMDD
 					console.log(`Scraping for date: ${dateString}`);
 					try {
 						const result = await scrapeHistoricalAnondUrls(environment, dateString);
-						response.results.push(result);
-						response.totalNewUrls += result.newUrls.length;
-						response.totalExistingUrls += result.existingUrlsCount;
-						response.totalPagesScrapped += result.pagesScraped;
-						response.yearsProcessed.push(yearString);
 						console.log(`Completed scraping for ${dateString}: ${result.newUrls.length} new URLs.`);
 					} catch (error: unknown) {
 						const reason = error instanceof Error ? error.message : String(error);
-						response.failedYears[yearString] = reason;
 						console.error(`Failed scraping for ${dateString}: ${reason}`);
 					}
 
@@ -215,7 +172,7 @@ export default {
 					await new Promise((resolve) => setTimeout(resolve, 500));
 				}
 
-				return new Response(JSON.stringify(response), {
+				return new Response(JSON.stringify({}), {
 					headers: { 'Content-Type': 'application/json' },
 				});
 			} catch (error: unknown) {
@@ -289,17 +246,7 @@ export default {
 				const dates: string[] = generateMonthDaysBetween(startMonthDay, endMonthDay);
 				console.log(`処理する日付範囲: ${dates.join(', ')} (${dates.length}日間)`);
 
-				const response: DateRangeBatchScrapeResult = {
-					dateResults: {},
-					totalNewUrls: 0,
-					totalExistingUrls: 0,
-					totalPagesScrapped: 0,
-					datesProcessed: [],
-					failedDates: {},
-					startMonthDay,
-					endMonthDay,
-				};
-
+				let totalNewUrls = 0;
 				// 各日付に対して順次処理
 				for (const monthDay of dates) {
 					console.log(`日付 ${monthDay} の処理を開始`);
@@ -307,15 +254,7 @@ export default {
 						// 個別の月日に対するスクレイピングロジックを再利用
 						const startYear = 2006;
 						const endYear = 2025;
-						const dateResult: BatchScrapeByMonthDayResult = {
-							results: [],
-							totalNewUrls: 0,
-							totalExistingUrls: 0,
-							totalPagesScrapped: 0,
-							yearsProcessed: [],
-							failedYears: {},
-							monthDay,
-						};
+						let _totalNewUrls = 0;
 
 						// 各年を順番に処理
 						for (let year = startYear; year <= endYear; year++) {
@@ -324,15 +263,11 @@ export default {
 							console.log(`Scraping for date: ${dateString}`);
 							try {
 								const result = await scrapeHistoricalAnondUrls(environment, dateString);
-								dateResult.results.push(result);
-								dateResult.totalNewUrls += result.newUrls.length;
-								dateResult.totalExistingUrls += result.existingUrlsCount;
-								dateResult.totalPagesScrapped += result.pagesScraped;
-								dateResult.yearsProcessed.push(yearString);
+								_totalNewUrls += result.newUrls.length;
 								console.log(`Completed scraping for ${dateString}: ${result.newUrls.length} new URLs.`);
 							} catch (error: unknown) {
 								const reason = error instanceof Error ? error.message : String(error);
-								dateResult.failedYears[yearString] = reason;
+								// dateResult.failedYears[yearString] = reason;
 								console.error(`Failed scraping for ${dateString}: ${reason}`);
 							}
 
@@ -341,16 +276,11 @@ export default {
 						}
 
 						// 日付の結果を全体結果に追加
-						response.dateResults[monthDay] = dateResult;
-						response.totalNewUrls += dateResult.totalNewUrls;
-						response.totalExistingUrls += dateResult.totalExistingUrls;
-						response.totalPagesScrapped += dateResult.totalPagesScrapped;
-						response.datesProcessed.push(monthDay);
-
-						console.log(`日付 ${monthDay} の処理完了: ${dateResult.totalNewUrls}件の新規URL追加`);
+						totalNewUrls += _totalNewUrls;
+						console.log(`日付 ${monthDay} の処理完了: ${totalNewUrls}件の新規URL追加`);
 					} catch (error: unknown) {
 						const errorMessage = error instanceof Error ? error.message : String(error);
-						response.failedDates[monthDay] = errorMessage;
+						// response.failedDates[monthDay] = errorMessage;
 						console.error(`日付 ${monthDay} の処理エラー: ${errorMessage}`);
 					}
 
@@ -358,7 +288,7 @@ export default {
 					await new Promise((resolve) => setTimeout(resolve, 1000));
 				}
 
-				return new Response(JSON.stringify(response), {
+				return new Response(JSON.stringify({ totalNewUrls }), {
 					headers: { 'Content-Type': 'application/json' },
 				});
 			} catch (error: unknown) {
@@ -389,7 +319,7 @@ export default {
 		// ルートURL: 日付に基づいてランダムな過去記事へリダイレクト
 		if (url.pathname === '/') {
 			try {
-				const now = new Date();
+				const now = convertToJST(new Date());
 				const month = String(now.getMonth() + 1).padStart(2, '0'); // 01-12
 				const day = String(now.getDate()).padStart(2, '0'); // 01-31
 				const currentYear = now.getFullYear(); // YYYY (as number)
@@ -442,7 +372,7 @@ export default {
 	},
 
 	// スケジュールされたジョブ
-	async scheduled(controller: ScheduledController, environment: Environment): Promise<void> {
+	async scheduled(controller: ScheduledController, environment: Env): Promise<void> {
 		console.log(`スクレイピング実行: ${controller.cron}`);
 
 		try {
@@ -454,12 +384,12 @@ export default {
 			console.error(`スクレイピングエラー: ${errorMessage}`);
 		}
 	},
-} satisfies ExportedHandler<Environment>;
+} satisfies ExportedHandler<Env>;
 
 /**
  * anond.hatelabo.jpからURLをスクレイピングする
  */
-async function scrapeAnondUrls(environment: Environment): Promise<ScrapeResult> {
+async function scrapeAnondUrls(environment: Env): Promise<ScrapeResult> {
 	// 開始ページ
 	const startUrl = 'https://anond.hatelabo.jp/';
 	return await scrapeAnondUrlsRecursive(environment, startUrl);
@@ -468,7 +398,7 @@ async function scrapeAnondUrls(environment: Environment): Promise<ScrapeResult> 
 /**
  * 特定日付のanond.hatelabo.jp/YYYYMMDD からURLをスクレイピングする
  */
-async function scrapeHistoricalAnondUrls(environment: Environment, date: string): Promise<HistoricalScrapeResult> {
+async function scrapeHistoricalAnondUrls(environment: Env, date: string): Promise<HistoricalScrapeResult> {
 	// 日付フォーマットに対応したURL
 	const startUrl = `https://anond.hatelabo.jp/${date}`;
 	const baseResult = await scrapeAnondUrlsRecursive(environment, startUrl);
@@ -483,7 +413,7 @@ async function scrapeHistoricalAnondUrls(environment: Environment, date: string)
  * 日付の範囲を指定して複数日の過去記事をバッチでスクレイピングする
  */
 async function batchScrapeHistoricalAnondUrls(
-	environment: Environment,
+	environment: Env,
 	startDate: string,
 	endDate: string,
 	maxDays: number | undefined,
@@ -571,7 +501,7 @@ function formatDateToString(date: Date): string {
  * 再帰的にページをスクレイピングする
  */
 async function scrapeAnondUrlsRecursive(
-	environment: Environment,
+	environment: Env,
 	pageUrl: string,
 	maxPages: number | undefined = undefined,
 ): Promise<ScrapeResult> {
@@ -638,12 +568,6 @@ async function scrapeAnondUrlsRecursive(
 			}
 		}
 
-		// // このページで既存URLと衝突が多かった場合は処理を停止
-		// if (pageExistingUrls > 0 && pageNewUrls === 0) {
-		// 	console.log(`既存URLのみを検出したため停止します。`);
-		// 	foundNewUrls = false;
-		// }
-
 		// 結果を更新
 		result.existingUrlsCount += pageExistingUrls;
 		result.pagesScraped++;
@@ -696,4 +620,11 @@ function generateMonthDaysBetween(startMonthDay: string, endMonthDay: string): s
 	}
 
 	return dates;
+}
+
+/**
+ * UTCの日付をJST（日本標準時）に変換する
+ */
+function convertToJST(date: Date): Date {
+	return new Date(date.getTime() + 9 * 60 * 60 * 1000);
 }

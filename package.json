@@ -5,7 +5,7 @@
 	"type": "module",
 	"scripts": {
 		"deploy": "wrangler deploy",
-		"dev": "wrangler dev --test-scheduled",
+		"dev": "wrangler dev --test-scheduled --env dev",
 		"start": "wrangler dev --test-scheduled",
 		"cf-typegen": "wrangler types",
 		"lint": "eslint . --ext .ts,.tsx",
@@ -13,7 +13,6 @@
 		"format:check": "prettier --check ."
 	},
 	"devDependencies": {
-		"@cloudflare/workers-types": "^4.20250410.0",
 		"@typescript-eslint/eslint-plugin": "^8.29.1",
 		"@typescript-eslint/parser": "^8.29.1",
 		"eslint": "^9.24.0",

@@ -62,6 +62,13 @@
 			"vars": {
 				"IS_DEVELOPMENT": true,
 			},
+			"d1_databases": [
+				{
+					"binding": "DB",
+					"database_name": "masuda-forever-db",
+					"database_id": "6d9aa237-ec4d-4c0e-b75f-40e55a0c0dde",
+				},
+			],
 		},
 	},
 }
