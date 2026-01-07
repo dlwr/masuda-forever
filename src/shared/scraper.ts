@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import type { Client } from '@libsql/client';
 
 export interface ArticleURL {
 	url: string;
@@ -15,14 +16,13 @@ export interface HistoricalScrapeResult extends ScrapeResult {
 	date: string;
 }
 
-export interface Database {
-	prepare(query: string): Promise<{
-		bind(...parameters: unknown[]): Promise<void>;
-		get<T>(): Promise<T | null | undefined>;
-		run(): Promise<{ changes?: number; lastID?: number }>;
-		finalize(): Promise<void>;
-	}>;
-	close(): Promise<void>;
+/**
+ * 軽量スクレイピング結果（1ページ分）
+ */
+export interface LightScrapeResult {
+	articles: ArticleURL[];
+	nextPageUrl: string | undefined;
+	insertedCount: number;
 }
 
 /**
@@ -41,19 +41,19 @@ function logProgress(message: string, data?: Record<string, unknown>) {
 /**
  * anond.hatelabo.jpからURLをスクレイピングする
  */
-export async function scrapeAnondUrls(database: Database, maxPages?: number): Promise<ScrapeResult> {
+export async function scrapeAnondUrls(client: Client, maxPages?: number): Promise<ScrapeResult> {
 	const startUrl = 'https://anond.hatelabo.jp/';
 	logProgress('スクレイピング開始', { startUrl, maxPages });
-	return await scrapeAnondUrlsRecursive(database, startUrl, maxPages);
+	return await scrapeAnondUrlsRecursive(client, startUrl, maxPages);
 }
 
 /**
  * 特定日付のanond.hatelabo.jp/YYYYMMDD からURLをスクレイピングする
  */
-export async function scrapeHistoricalAnondUrls(database: Database, date: string): Promise<HistoricalScrapeResult> {
+export async function scrapeHistoricalAnondUrls(client: Client, date: string): Promise<HistoricalScrapeResult> {
 	const startUrl = `https://anond.hatelabo.jp/${date}`;
 	logProgress('履歴スクレイピング開始', { startUrl, date });
-	const baseResult = await scrapeAnondUrlsRecursive(database, startUrl);
+	const baseResult = await scrapeAnondUrlsRecursive(client, startUrl);
 	return {
 		...baseResult,
 		date,
@@ -63,7 +63,7 @@ export async function scrapeHistoricalAnondUrls(database: Database, date: string
 /**
  * 月日の範囲に対する複数年スクレイピング
  */
-export async function scrapeAnondUrlsDateRange(database: Database, startDate: string, endDate: string): Promise<ScrapeResult> {
+export async function scrapeAnondUrlsDateRange(client: Client, startDate: string, endDate: string): Promise<ScrapeResult> {
 	const startMonth = Number.parseInt(startDate.slice(0, 2), 10);
 	const startDay = Number.parseInt(startDate.slice(2, 4), 10);
 	const endMonth = Number.parseInt(endDate.slice(0, 2), 10);
@@ -99,12 +99,11 @@ export async function scrapeAnondUrlsDateRange(database: Database, startDate: st
 					const dateString = `${yearString}${monthDay}`; // YYYYMMDD
 					console.log(`Scraping for date: ${dateString}`);
 					try {
-						const result = await scrapeHistoricalAnondUrls(database, dateString);
+						const result = await scrapeHistoricalAnondUrls(client, dateString);
 						_totalNewUrls += result.newUrls.length;
 						console.log(`Completed scraping for ${dateString}: ${result.newUrls.length} new URLs.`);
 					} catch (error: unknown) {
 						const reason = error instanceof Error ? error.message : String(error);
-						// dateResult.failedYears[yearString] = reason;
 						console.error(`Failed scraping for ${dateString}: ${reason}`);
 					}
 
@@ -117,7 +116,6 @@ export async function scrapeAnondUrlsDateRange(database: Database, startDate: st
 				console.log(`日付 ${monthDay} の処理完了: ${totalNewUrls}件の新規URL追加`);
 			} catch (error: unknown) {
 				const errorMessage = error instanceof Error ? error.message : String(error);
-				// response.failedDates[monthDay] = errorMessage;
 				console.error(`日付 ${monthDay} の処理エラー: ${errorMessage}`);
 			}
 
@@ -169,10 +167,11 @@ function generateMonthDaysBetween(startMonthDay: string, endMonthDay: string): s
 
 	return dates;
 }
+
 /**
  * 再帰的にページをスクレイピングする
  */
-async function scrapeAnondUrlsRecursive(database: Database, pageUrl: string, maxPages?: number): Promise<ScrapeResult> {
+async function scrapeAnondUrlsRecursive(client: Client, pageUrl: string, maxPages?: number): Promise<ScrapeResult> {
 	const result: ScrapeResult = {
 		newUrls: [],
 		existingUrlsCount: 0,
@@ -222,18 +221,21 @@ async function scrapeAnondUrlsRecursive(database: Database, pageUrl: string, max
 
 			for (const article of pageArticles) {
 				try {
-					const selectStmt = await database.prepare('SELECT url FROM article_urls WHERE url = ?');
-					await selectStmt.bind(article.url);
-					const existingUrl = await selectStmt.get<{ url: string }>();
-					await selectStmt.finalize();
+					// URLが既に存在するか確認
+					const existingResult = await client.execute({
+						sql: 'SELECT url FROM article_urls WHERE url = ?',
+						args: [article.url],
+					});
+					const existingUrl = existingResult.rows[0] as { url?: string } | undefined;
 
-					if (existingUrl) {
+					if (existingUrl?.url) {
 						pageExistingUrls++;
 					} else {
-						const insertStmt = await database.prepare('INSERT INTO article_urls (url, title) VALUES (?, ?)');
-						await insertStmt.bind(article.url, article.title);
-						await insertStmt.run();
-						await insertStmt.finalize();
+						// 新しいURLを保存
+						await client.execute({
+							sql: 'INSERT INTO article_urls (url, title) VALUES (?, ?)',
+							args: [article.url, article.title],
+						});
 
 						result.newUrls.push(article);
 						pageNewUrls++;
@@ -286,4 +288,88 @@ async function scrapeAnondUrlsRecursive(database: Database, pageUrl: string, max
 	});
 
 	return result;
+}
+
+/**
+ * 正規表現ベースの軽量HTMLパーサー（CPU使用量削減版）
+ * cheerioの代わりに使用してCPU時間を節約
+ */
+export function extractArticlesWithRegex(html: string): ArticleURL[] {
+	const articles: ArticleURL[] = [];
+	// <div class="section">...<h3><a href="/YYYYMMDDHHMMSS">... のパターンをマッチ
+	// 最初のリンクがパーマリンク（/YYYYMMDDHHMMSS形式）
+	const regex = /<div class="section"[^>]*>[\s\S]*?<h3>\s*<a href="(\/\d{14})"/g;
+	let match: RegExpExecArray | null;
+	while ((match = regex.exec(html)) !== null) {
+		const url = `https://anond.hatelabo.jp${match[1]}`;
+		articles.push({ url, title: '■' });
+	}
+	return articles;
+}
+
+/**
+ * 次のページURLを正規表現で抽出
+ */
+export function extractNextPageUrl(html: string): string | undefined {
+	// "次の25件>" または "次の25件&gt;" のパターンをマッチ
+	const match = html.match(/<a href="([^"]+)"[^>]*>次の\d+件[>&]/);
+	if (!match) return undefined;
+	// HTMLエンティティをデコード
+	const url = match[1].replace(/&amp;/g, '&');
+	return url.startsWith('http') ? url : `https://anond.hatelabo.jp${url}`;
+}
+
+/**
+ * バッチ挿入（複数URLを1回のSQLで挿入、CPU時間とDB往復を削減）
+ */
+export async function batchInsertUrls(client: Client, articles: ArticleURL[]): Promise<number> {
+	if (articles.length === 0) return 0;
+
+	// INSERT OR IGNORE で重複を無視
+	const placeholders = articles.map(() => '(?, ?)').join(', ');
+	const sqlArguments = articles.flatMap((a) => [a.url, a.title]);
+
+	const result = await client.execute({
+		sql: `INSERT OR IGNORE INTO article_urls (url, title) VALUES ${placeholders}`,
+		args: sqlArguments,
+	});
+
+	return result.rowsAffected;
+}
+
+/**
+ * 軽量スクレイピング: 1ページだけ処理（Cloudflare Workers無料プラン向け）
+ * - 正規表現パーサー使用
+ * - バッチ挿入使用
+ * - ページネーション情報を返却
+ */
+export async function scrapeSinglePageLight(client: Client, pageUrl: string): Promise<LightScrapeResult> {
+	logProgress('軽量スクレイピング開始', { pageUrl });
+
+	const response = await fetch(pageUrl);
+	if (!response.ok) {
+		throw new Error(`スクレイピング失敗: ${response.status} ${response.statusText}`);
+	}
+
+	const html = await response.text();
+
+	// 正規表現でパース（CPU軽量）
+	const articles = extractArticlesWithRegex(html);
+	const nextPageUrl = extractNextPageUrl(html);
+
+	// バッチ挿入
+	const insertedCount = await batchInsertUrls(client, articles);
+
+	logProgress('軽量スクレイピング完了', {
+		pageUrl,
+		foundArticles: articles.length,
+		insertedCount,
+		hasNextPage: nextPageUrl !== undefined,
+	});
+
+	return {
+		articles,
+		nextPageUrl,
+		insertedCount,
+	};
 }

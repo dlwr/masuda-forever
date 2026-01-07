@@ -4,25 +4,51 @@
  * anond.hatelabo.jpの記事URLを保全するスクレイパー
  */
 
-import * as cheerio from 'cheerio';
+import { createClient } from '@libsql/client';
+import { scrapeSinglePageLight } from './shared/scraper.js';
 
-interface ArticleURL {
-	url: string;
-	title: string;
+type TursoEnvironment = {
+	TURSO_DB_URL: string;
+	TURSO_AUTH_TOKEN: string;
+};
+
+type TursoClient = ReturnType<typeof createClient>;
+
+/**
+ * スクレイピング進捗情報
+ */
+interface ScrapeProgress {
+	date: string;
+	status: 'pending' | 'in_progress' | 'completed';
+	lastPageUrl: string | undefined;
+	pagesScraped: number;
+	urlsFound: number;
 }
 
-interface ScrapeResult {
-	newUrls: ArticleURL[];
-	existingUrlsCount: number;
-	pagesScraped: number;
+function createTursoClient(environment: TursoEnvironment): TursoClient {
+	if (!environment.TURSO_DB_URL) {
+		throw new Error('TURSO_DB_URL is not set');
+	}
+
+	if (!environment.TURSO_AUTH_TOKEN) {
+		throw new Error('TURSO_AUTH_TOKEN is not set');
+	}
+
+	return createClient({
+		url: environment.TURSO_DB_URL,
+		authToken: environment.TURSO_AUTH_TOKEN,
+		fetch,
+	});
 }
 
 export default {
-	async fetch(request: Request, environment: Env): Promise<Response> {
+	async fetch(request: Request, environment: TursoEnvironment): Promise<Response> {
 		const url = new URL(request.url);
 		// ルートURL: 日付に基づいてランダムな過去記事へリダイレクト
 		if (url.pathname === '/') {
+			let client: TursoClient | undefined;
 			try {
+				client = createTursoClient(environment);
 				const now = convertToJST(new Date());
 				const month = String(now.getMonth() + 1).padStart(2, '0'); // 01-12
 				const day = String(now.getDate()).padStart(2, '0'); // 01-31
@@ -49,18 +75,19 @@ export default {
 				const randomYearString = String(randomYear);
 
 				// Fetch a random article from that specific year and month/day
-				const stmt = environment.DB.prepare(
-					`SELECT url FROM article_urls
+				const result = await client.execute({
+					sql: `SELECT url FROM article_urls
 					 WHERE substr(url, 27, 4) = ?1 -- Check Year from URL path (position 27)
 					   AND substr(url, 31, 4) = ?2 -- Check MonthDay from URL path (position 31)
 					 ORDER BY RANDOM()
 					 LIMIT 1`,
-				).bind(randomYearString, currentMonthDay);
+					args: [randomYearString, currentMonthDay],
+				});
 
-				const result = await stmt.first<{ url: string }>();
+				const row = result.rows[0] as { url?: string } | undefined;
 
-				return result && result.url
-					? Response.redirect(result.url, 302)
+				return row?.url
+					? Response.redirect(row.url, 302)
 					: new Response('No matching historical article found for this date.', { status: 404 });
 			} catch (error: unknown) {
 				console.error('Error handling root path redirect:', error);
@@ -69,6 +96,8 @@ export default {
 					status: 500,
 					headers: { 'Content-Type': 'application/json' },
 				});
+			} finally {
+				client?.close();
 			}
 		}
 
@@ -76,118 +105,168 @@ export default {
 	},
 
 	// スケジュールされたジョブ
-	async scheduled(controller: ScheduledController, environment: Env): Promise<void> {
+	async scheduled(controller: ScheduledController, environment: TursoEnvironment): Promise<void> {
 		console.log(`スクレイピング実行: ${controller.cron}`);
 
+		let client: TursoClient | undefined;
 		try {
-			// 通常のスクレイピング
-			const result = await scrapeAnondUrls(environment);
-			console.log(`スクレイピング完了: ${result.newUrls.length}件の新規URL追加、${result.pagesScraped}ページ処理`);
+			client = createTursoClient(environment);
+
+			// 1. 最新記事のスクレイピング（軽量版: 1ページのみ）
+			try {
+				const latestResult = await scrapeSinglePageLight(client, 'https://anond.hatelabo.jp/');
+				console.log(`最新記事スクレイピング完了: ${latestResult.insertedCount}件追加`);
+			} catch (error: unknown) {
+				const errorMessage = error instanceof Error ? error.message : String(error);
+				console.error(`最新記事スクレイピングエラー: ${errorMessage}`);
+			}
+
+			// 2. 過去日付の埋め合わせ（1ページのみ）
+			try {
+				await scrapeNextPendingDate(client);
+			} catch (error: unknown) {
+				const errorMessage = error instanceof Error ? error.message : String(error);
+				console.error(`過去日付スクレイピングエラー: ${errorMessage}`);
+			}
 		} catch (error: unknown) {
 			const errorMessage = error instanceof Error ? error.message : String(error);
 			console.error(`スクレイピングエラー: ${errorMessage}`);
+		} finally {
+			client?.close();
 		}
 	},
-} satisfies ExportedHandler<Env>;
+} satisfies ExportedHandler<TursoEnvironment>;
 
 /**
- * anond.hatelabo.jpからURLをスクレイピングする
+ * 次に処理すべき日付を取得して1ページスクレイピング
  */
-async function scrapeAnondUrls(environment: Env): Promise<ScrapeResult> {
-	// 開始ページ
-	const startUrl = 'https://anond.hatelabo.jp/';
-	return await scrapeAnondUrlsRecursive(environment, startUrl);
+async function scrapeNextPendingDate(client: TursoClient): Promise<void> {
+	const progress = await getNextPendingProgress(client);
+	if (!progress) {
+		console.log('処理待ちの日付がありません');
+		return;
+	}
+
+	console.log(`過去日付スクレイピング開始: ${progress.date} (status: ${progress.status})`);
+
+	// スクレイピングするURL
+	const pageUrl = progress.lastPageUrl ?? `https://anond.hatelabo.jp/${progress.date}`;
+
+	try {
+		const result = await scrapeSinglePageLight(client, pageUrl);
+
+		// 進捗を更新
+		if (result.nextPageUrl) {
+			// 次ページがある場合: in_progress状態で継続
+			await updateProgress(
+				client,
+				progress.date,
+				'in_progress',
+				result.nextPageUrl,
+				progress.pagesScraped + 1,
+				progress.urlsFound + result.insertedCount,
+			);
+			console.log(`${progress.date}: ページ${progress.pagesScraped + 1}完了、次ページあり`);
+		} else {
+			// 次ページがない場合: completed
+			await updateProgress(
+				client,
+				progress.date,
+				'completed',
+				undefined,
+				progress.pagesScraped + 1,
+				progress.urlsFound + result.insertedCount,
+			);
+			console.log(`${progress.date}: スクレイピング完了 (${progress.pagesScraped + 1}ページ、${progress.urlsFound + result.insertedCount}件)`);
+		}
+	} catch (error) {
+		console.error(`${progress.date}: スクレイピングエラー`, error);
+		// エラーでもin_progressのまま（次回リトライ）
+	}
 }
 
 /**
- * 再帰的にページをスクレイピングする
+ * 次に処理すべき進捗情報を取得（今日に近い月日を優先）
  */
-async function scrapeAnondUrlsRecursive(
-	environment: Env,
-	pageUrl: string,
-	maxPages: number | undefined = undefined,
-): Promise<ScrapeResult> {
-	const result: ScrapeResult = {
-		newUrls: [],
-		existingUrlsCount: 0,
-		pagesScraped: 0,
+async function getNextPendingProgress(client: TursoClient): Promise<ScrapeProgress | undefined> {
+	const now = convertToJST(new Date());
+	const todayDayOfYear = getDayOfYear(now.getMonth() + 1, now.getDate());
+
+	// in_progressの日付を優先、なければpendingの日付を取得
+	// 優先度: 今日からの未来方向の距離が近い順
+	const result = await client.execute({
+		sql: `
+			SELECT
+				date,
+				status,
+				last_page_url as lastPageUrl,
+				pages_scraped as pagesScraped,
+				urls_found as urlsFound
+			FROM scrape_progress
+			WHERE status IN ('pending', 'in_progress')
+			ORDER BY
+				CASE status WHEN 'in_progress' THEN 0 ELSE 1 END,
+				(CAST(substr(date, 5, 2) AS INTEGER) - 1) * 31 + CAST(substr(date, 7, 2) AS INTEGER) - ?1 +
+				CASE WHEN (CAST(substr(date, 5, 2) AS INTEGER) - 1) * 31 + CAST(substr(date, 7, 2) AS INTEGER) < ?1
+					THEN 365 ELSE 0 END
+			LIMIT 1
+		`,
+		args: [todayDayOfYear],
+	});
+
+	const row = result.rows[0] as unknown as
+		| {
+				date: string;
+				status: string;
+				lastPageUrl: string | undefined;
+				pagesScraped: number;
+				urlsFound: number;
+		  }
+		| undefined;
+
+	if (!row) return undefined;
+
+	return {
+		date: row.date,
+		status: row.status as 'pending' | 'in_progress' | 'completed',
+		lastPageUrl: row.lastPageUrl ?? undefined,
+		pagesScraped: row.pagesScraped,
+		urlsFound: row.urlsFound,
 	};
+}
 
-	let currentUrl = pageUrl;
-	let pagesProcessed = 0;
-	const foundNewUrls = true;
+/**
+ * 進捗を更新
+ */
+async function updateProgress(
+	client: TursoClient,
+	date: string,
+	status: 'pending' | 'in_progress' | 'completed',
+	lastPageUrl: string | undefined,
+	pagesScraped: number,
+	urlsFound: number,
+): Promise<void> {
+	await client.execute({
+		sql: `
+			UPDATE scrape_progress
+			SET status = ?, last_page_url = ?, pages_scraped = ?, urls_found = ?, updated_at = CURRENT_TIMESTAMP
+			WHERE date = ?
+		`,
+		// Tursoはundefinedをサポートしないのでnullに変換
+		args: [status, lastPageUrl ?? null, pagesScraped, urlsFound, date],
+	});
+}
 
-	// 最大ページ数まで、または新しいURLが見つからなくなるまでスクレイピング
-	while (currentUrl && (!maxPages || pagesProcessed < maxPages) && foundNewUrls) {
-		console.log(`ページをスクレイピング: ${currentUrl}`);
-
-		const response = await fetch(currentUrl);
-		if (!response.ok) {
-			throw new Error(`スクレイピング失敗: ${response.status} ${response.statusText}`);
-		}
-
-		const html = await response.text();
-		const $ = cheerio.load(html);
-
-		// 該当ページの記事URLを抽出
-		const pageArticles: ArticleURL[] = [];
-		$('div.section').each((_, element) => {
-			const linkElement = $(element).find('h3 a');
-			const url = linkElement.attr('href');
-			const title = linkElement.text().trim() || '■';
-
-			if (url) {
-				const fullUrl = url.startsWith('http') ? url : `https://anond.hatelabo.jp${url}`;
-				pageArticles.push({ url: fullUrl, title });
-			}
-		});
-
-		console.log(`ページのスクレイピング結果: ${pageArticles.length}件のURL取得`);
-
-		// 既存URLのカウンターと新規URLのフラグ
-		let pageExistingUrls = 0;
-
-		// 新しいURLのみをデータベースに保存
-		for (const article of pageArticles) {
-			try {
-				// URLが既に存在するか確認
-				const existingUrl = await environment.DB.prepare('SELECT url FROM article_urls WHERE url = ?')
-					.bind(article.url)
-					.first<{ url: string }>();
-
-				if (existingUrl) {
-					pageExistingUrls++;
-				} else {
-					// 新しいURLを保存
-					await environment.DB.prepare('INSERT INTO article_urls (url, title) VALUES (?, ?)').bind(article.url, article.title).run();
-
-					result.newUrls.push(article);
-					console.log(`新規URL保存: ${article.url}`);
-				}
-			} catch (error: unknown) {
-				const errorMessage = error instanceof Error ? error.message : String(error);
-				console.error(`DB保存エラー: ${errorMessage}`);
-			}
-		}
-
-		// 結果を更新
-		result.existingUrlsCount += pageExistingUrls;
-		result.pagesScraped++;
-		pagesProcessed++;
-
-		// 次のページURLを取得
-		const nextPageLink = $('.pager-l a')
-			.filter((_, element) => $(element).text().includes('次'))
-			.attr('href');
-		if (nextPageLink && foundNewUrls) {
-			currentUrl = nextPageLink.startsWith('http') ? nextPageLink : `https://anond.hatelabo.jp${nextPageLink}`;
-			console.log(`次のページに進みます: ${currentUrl}`);
-		} else {
-			currentUrl = '';
-		}
+/**
+ * 月日から年間の通算日を計算（簡易版）
+ */
+function getDayOfYear(month: number, day: number): number {
+	const daysInMonth = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+	let dayOfYear = day;
+	for (let index = 0; index < month - 1; index++) {
+		dayOfYear += daysInMonth[index];
 	}
-
-	return result;
+	return dayOfYear;
 }
 
 /**
