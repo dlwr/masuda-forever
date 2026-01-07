@@ -4,7 +4,7 @@ anond.hatelabo.jpの記事URLを保全し再利用するためのCloudflare Work
 
 ## 概要
 
-このプロジェクトは、はてな匿名ダイアリー（anond.hatelabo.jp）の記事URLを保全し、再利用するためのCloudflare Workersアプリケーションです。記事のURLとタイトルをD1データベースに保存し、過去の記事にランダムでリダイレクトする機能などを提供します。スクレイピングはURL保全のための手段として使用しています。
+このプロジェクトは、はてな匿名ダイアリー（anond.hatelabo.jp）の記事URLを保全し、再利用するためのCloudflare Workersアプリケーションです。記事のURLとタイトルをTurso（libSQL）データベースに保存し、過去の記事にランダムでリダイレクトする機能などを提供します。スクレイピングはURL保全のための手段として使用しています。
 
 ## 機能
 
@@ -18,7 +18,7 @@ anond.hatelabo.jpの記事URLを保全し再利用するためのCloudflare Work
 ## 技術スタック
 
 - [Cloudflare Workers](https://workers.cloudflare.com/)
-- [Cloudflare D1](https://developers.cloudflare.com/d1/) (SQLiteデータベース)
+- [Turso](https://turso.tech/) (libSQL/SQLite互換データベース)
 - [TypeScript](https://www.typescriptlang.org/)
 - [Cheerio](https://cheerio.js.org/) (HTMLパース)
 - [Wrangler](https://developers.cloudflare.com/workers/wrangler/) (開発・デプロイツール)
@@ -44,18 +44,10 @@ npm install
 
 ### 環境設定
 
-1. Cloudflareダッシュボードでワーカーとデータベースを作成し、`wrangler.jsonc`の設定を更新してください。
-2. ローカルD1データベースを初期化:
-
-```bash
-wrangler d1 create masuda-forever-db
-```
-
-3. 初期スキーマを適用:
-
-```bash
-wrangler d1 execute masuda-forever-db --file=./schema.sql
-```
+1. Tursoでデータベースを作成し、URLとAuth Tokenを取得してください。
+2. `wrangler.jsonc` の `TURSO_DB_URL` を設定してください。
+3. `TURSO_AUTH_TOKEN` はシークレットとして設定してください（例: `wrangler secret put TURSO_AUTH_TOKEN`）。ローカル開発時は `.dev.vars` での設定も可能です。
+4. `schema.sql` をTursoに適用してください（Turso CLIまたはダッシュボードのSQL実行機能を使用）。
 
 ## 開発
 

@@ -1,22 +1,47 @@
-import sqlite3 from 'sqlite3';
+import { createClient, Client } from '@libsql/client';
 
-export interface Database {
-	prepare(query: string): Promise<{
-		bind(...parameters: unknown[]): Promise<void>;
-		get<T>(): Promise<T | null | undefined>;
-		run(): Promise<{ changes?: number; lastID?: number }>;
-	}>;
-	close(): Promise<void>;
+export type TursoClient = Client;
+
+export interface TursoConfig {
+	url: string;
+	authToken: string;
 }
 
-export async function connectDatabase(): Promise<Database> {
-	return new Promise((resolve, reject) => {
-		const database = new sqlite3.Database('anond.db', (error) => {
-			if (error) {
-				reject(error);
-			} else {
-				resolve(database as unknown as Database);
-			}
-		});
+/**
+ * Tursoデータベースに接続する
+ */
+export function connectTurso(config: TursoConfig): TursoClient {
+	if (!config.url) {
+		throw new Error('TURSO_DB_URL is not set');
+	}
+
+	if (!config.authToken) {
+		throw new Error('TURSO_AUTH_TOKEN is not set');
+	}
+
+	return createClient({
+		url: config.url,
+		authToken: config.authToken,
+	});
+}
+
+/**
+ * 環境変数からTursoに接続する（CLI用）
+ */
+export function connectTursoFromEnvironment(): TursoClient {
+	const url = process.env.TURSO_DB_URL;
+	const authToken = process.env.TURSO_AUTH_TOKEN;
+
+	if (!url) {
+		throw new Error('環境変数 TURSO_DB_URL が設定されていません');
+	}
+
+	if (!authToken) {
+		throw new Error('環境変数 TURSO_AUTH_TOKEN が設定されていません');
+	}
+
+	return createClient({
+		url,
+		authToken,
 	});
 }
