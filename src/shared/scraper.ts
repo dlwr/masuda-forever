@@ -216,37 +216,14 @@ async function scrapeAnondUrlsRecursive(client: Client, pageUrl: string, maxPage
 				foundArticles: pageArticles.length,
 			});
 
-			let pageExistingUrls = 0;
-			let pageNewUrls = 0;
+			// N+1パターン解消: INSERT OR IGNORE で一括挿入
+			// 重複はDBレベルで無視される
+			const insertedCount = await batchInsertUrls(client, pageArticles);
+			const pageNewUrls = insertedCount;
+			const pageExistingUrls = pageArticles.length - insertedCount;
 
-			for (const article of pageArticles) {
-				try {
-					// URLが既に存在するか確認
-					const existingResult = await client.execute({
-						sql: 'SELECT url FROM article_urls WHERE url = ?',
-						args: [article.url],
-					});
-					const existingUrl = existingResult.rows[0] as { url?: string } | undefined;
-
-					if (existingUrl?.url) {
-						pageExistingUrls++;
-					} else {
-						// 新しいURLを保存
-						await client.execute({
-							sql: 'INSERT INTO article_urls (url, title) VALUES (?, ?)',
-							args: [article.url, article.title],
-						});
-
-						result.newUrls.push(article);
-						pageNewUrls++;
-					}
-				} catch (error) {
-					logProgress('DB保存エラー', {
-						error: error instanceof Error ? error.message : 'Unknown error',
-						url: article.url,
-					});
-				}
-			}
+			// 新規挿入された記事を結果に追加（正確なカウントのみ）
+			result.newUrls.push(...pageArticles.slice(0, insertedCount));
 
 			result.existingUrlsCount += pageExistingUrls;
 			result.pagesScraped++;
@@ -315,7 +292,7 @@ export function extractNextPageUrl(html: string): string | undefined {
 	const match = html.match(/<a href="([^"]+)"[^>]*>次の\d+件[>&]/);
 	if (!match) return undefined;
 	// HTMLエンティティをデコード
-	const url = match[1].replace(/&amp;/g, '&');
+	const url = match[1].replaceAll('&amp;', '&');
 	return url.startsWith('http') ? url : `https://anond.hatelabo.jp${url}`;
 }
 
@@ -326,11 +303,18 @@ export async function batchInsertUrls(client: Client, articles: ArticleURL[]): P
 	if (articles.length === 0) return 0;
 
 	// INSERT OR IGNORE で重複を無視
-	const placeholders = articles.map(() => '(?, ?)').join(', ');
-	const sqlArguments = articles.flatMap((a) => [a.url, a.title]);
+	// url_year, url_monthday を同時に挿入（URLから抽出）
+	const placeholders = articles.map(() => '(?, ?, ?, ?)').join(', ');
+	const sqlArguments = articles.flatMap((a) => {
+		// URL形式: https://anond.hatelabo.jp/YYYYMMDDHHMMSS
+		// 位置27から4文字が年（YYYY）、位置31から4文字が月日（MMDD）
+		const urlYear = a.url.length >= 31 ? a.url.slice(27, 31) : '';
+		const urlMonthDay = a.url.length >= 35 ? a.url.slice(31, 35) : '';
+		return [a.url, a.title, urlYear, urlMonthDay];
+	});
 
 	const result = await client.execute({
-		sql: `INSERT OR IGNORE INTO article_urls (url, title) VALUES ${placeholders}`,
+		sql: `INSERT OR IGNORE INTO article_urls (url, title, url_year, url_monthday) VALUES ${placeholders}`,
 		args: sqlArguments,
 	});
 

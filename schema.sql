@@ -3,12 +3,17 @@ CREATE TABLE IF NOT EXISTS article_urls (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   url TEXT UNIQUE NOT NULL,
   title TEXT,
+  url_year TEXT,       -- URLから抽出した年（YYYY形式）- インデックス用
+  url_monthday TEXT,   -- URLから抽出した月日（MMDD形式）- インデックス用
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   processed BOOLEAN DEFAULT FALSE
 );
 
 -- urlカラムにインデックスを追加
 CREATE INDEX IF NOT EXISTS idx_article_urls_url ON article_urls (url);
+
+-- 年・月日の複合インデックス（ランダムリダイレクト高速化用）
+CREATE INDEX IF NOT EXISTS idx_article_urls_year_monthday ON article_urls (url_year, url_monthday);
 
 -- スクレイピング進捗追跡テーブル
 CREATE TABLE IF NOT EXISTS scrape_progress (

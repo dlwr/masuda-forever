@@ -75,10 +75,10 @@ export default {
 				const randomYearString = String(randomYear);
 
 				// Fetch a random article from that specific year and month/day
+				// url_year, url_monthday カラムを使用（インデックスが効く）
 				const result = await client.execute({
 					sql: `SELECT url FROM article_urls
-					 WHERE substr(url, 27, 4) = ?1 -- Check Year from URL path (position 27)
-					   AND substr(url, 31, 4) = ?2 -- Check MonthDay from URL path (position 31)
+					 WHERE url_year = ?1 AND url_monthday = ?2
 					 ORDER BY RANDOM()
 					 LIMIT 1`,
 					args: [randomYearString, currentMonthDay],
@@ -253,6 +253,7 @@ async function updateProgress(
 			WHERE date = ?
 		`,
 		// Tursoはundefinedをサポートしないのでnullに変換
+		// eslint-disable-next-line unicorn/no-null
 		args: [status, lastPageUrl ?? null, pagesScraped, urlsFound, date],
 	});
 }
