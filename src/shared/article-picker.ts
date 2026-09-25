@@ -16,8 +16,11 @@ export async function checkArticleStatus(url: string, fetcher: Fetcher = fetch):
 		});
 		await response.body?.cancel();
 		if (response.status === 404) return 'deleted';
-		return response.ok ? 'alive' : 'unknown';
-	} catch {
+		if (response.ok) return 'alive';
+		console.warn(`記事の生存確認で想定外のステータス: ${response.status} ${url}`);
+		return 'unknown';
+	} catch (error: unknown) {
+		console.warn(`記事の生存確認に失敗: ${url}`, error);
 		return 'unknown';
 	}
 }
