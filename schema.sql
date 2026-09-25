@@ -6,7 +6,8 @@ CREATE TABLE IF NOT EXISTS article_urls (
   url_year TEXT,       -- URLから抽出した年（YYYY形式）- インデックス用
   url_monthday TEXT,   -- URLから抽出した月日（MMDD形式）- インデックス用
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  processed BOOLEAN DEFAULT FALSE
+  processed BOOLEAN DEFAULT FALSE,
+  deleted_at TIMESTAMP -- anond 側で削除を確認した日時
 );
 
 -- urlカラムにインデックスを追加
