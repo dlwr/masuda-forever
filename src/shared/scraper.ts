@@ -273,15 +273,26 @@ async function scrapeAnondUrlsRecursive(client: Client, pageUrl: string, maxPage
  */
 export function extractArticlesWithRegex(html: string): ArticleURL[] {
 	const articles: ArticleURL[] = [];
-	// <div class="section">...<h3><a href="/YYYYMMDDHHMMSS">... のパターンをマッチ
-	// 最初のリンクがパーマリンク（/YYYYMMDDHHMMSS形式）
-	const regex = /<div class="section"[^>]*>[\s\S]*?<h3>\s*<a href="(\/\d{14})"/g;
+	const regex = /<div class="section"[^>]*>[\s\S]*?<h3>\s*<a href="(\/\d{14})"[^>]*>[\s\S]*?<\/a>([\s\S]*?)<\/h3>/g;
 	let match: RegExpExecArray | null;
 	while ((match = regex.exec(html)) !== null) {
 		const url = `https://anond.hatelabo.jp${match[1]}`;
-		articles.push({ url, title: '■' });
+		articles.push({ url, title: extractTitleText(match[2]) || '■' });
 	}
 	return articles;
+}
+
+function extractTitleText(html: string): string {
+	return html
+		.replaceAll(/<button[\s\S]*?<\/button>/g, '')
+		.replaceAll(/<[^>]+>/g, '')
+		.replaceAll('&#34;', '"')
+		.replaceAll('&quot;', '"')
+		.replaceAll('&#39;', "'")
+		.replaceAll('&lt;', '<')
+		.replaceAll('&gt;', '>')
+		.replaceAll('&amp;', '&')
+		.trim();
 }
 
 /**
