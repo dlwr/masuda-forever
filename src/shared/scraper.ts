@@ -83,15 +83,14 @@ export async function scrapeAnondUrlsDateRange(client: Client, startDate: string
 		const dates: string[] = generateMonthDaysBetween(startDate, endDate);
 		console.log(`処理する日付範囲: ${dates.join(', ')} (${dates.length}日間)`);
 
-		let totalNewUrls = 0;
 		// 各日付に対して順次処理
 		for (const monthDay of dates) {
 			console.log(`日付 ${monthDay} の処理を開始`);
 			try {
 				// 個別の月日に対するスクレイピングロジックを再利用
 				const startYear = 2006;
-				const endYear = 2025;
-				let _totalNewUrls = 0;
+				const endYear = new Date().getFullYear();
+				let dayNewUrls = 0;
 
 				// 各年を順番に処理
 				for (let year = startYear; year <= endYear; year++) {
@@ -100,7 +99,7 @@ export async function scrapeAnondUrlsDateRange(client: Client, startDate: string
 					console.log(`Scraping for date: ${dateString}`);
 					try {
 						const result = await scrapeHistoricalAnondUrls(client, dateString);
-						_totalNewUrls += result.newUrls.length;
+						dayNewUrls += result.newUrls.length;
 						console.log(`Completed scraping for ${dateString}: ${result.newUrls.length} new URLs.`);
 					} catch (error: unknown) {
 						const reason = error instanceof Error ? error.message : String(error);
@@ -111,9 +110,7 @@ export async function scrapeAnondUrlsDateRange(client: Client, startDate: string
 					await new Promise((resolve) => setTimeout(resolve, 500));
 				}
 
-				// 日付の結果を全体結果に追加
-				totalNewUrls += _totalNewUrls;
-				console.log(`日付 ${monthDay} の処理完了: ${totalNewUrls}件の新規URL追加`);
+				console.log(`日付 ${monthDay} の処理完了: ${dayNewUrls}件の新規URL追加`);
 			} catch (error: unknown) {
 				const errorMessage = error instanceof Error ? error.message : String(error);
 				console.error(`日付 ${monthDay} の処理エラー: ${errorMessage}`);
