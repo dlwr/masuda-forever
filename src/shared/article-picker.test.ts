@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { checkArticleStatus, pickLiveArticleUrl } from './article-picker.js';
+import { checkArticleStatus, pickLiveArticleUrl, pickUrlFromRandomYear } from './article-picker.js';
 
 function statusFetcher(status: number) {
 	return vi.fn(async () => new Response('', { status }));
@@ -92,5 +92,31 @@ describe('pickLiveArticleUrl', () => {
 			markDeleted: async () => {},
 		});
 		expect(pickRandomUrl).toHaveBeenCalledTimes(3);
+	});
+});
+
+describe('pickUrlFromRandomYear', () => {
+	it('記事のある年からURLを返す', async () => {
+		const url = await pickUrlFromRandomYear(['2008', '2009', '2010'], async (year) =>
+			year === '2008' ? 'https://anond.hatelabo.jp/20080229000000' : undefined,
+		);
+		expect(url).toBe('https://anond.hatelabo.jp/20080229000000');
+	});
+
+	it('どの年にも記事がなければ undefined を返す', async () => {
+		const url = await pickUrlFromRandomYear(['2009', '2010'], async () => {});
+		expect(url).toBeUndefined();
+	});
+
+	it('全ての年を1回ずつ探す', async () => {
+		const findUrlInYear = vi.fn<(year: string) => Promise<void>>(async () => {});
+		await pickUrlFromRandomYear(['2009', '2010', '2011'], findUrlInYear);
+		expect(findUrlInYear.mock.calls.map(([year]) => year).sort()).toEqual(['2009', '2010', '2011']);
+	});
+
+	it('記事が見つかったらそれ以上探さない', async () => {
+		const findUrlInYear = vi.fn(async () => 'https://anond.hatelabo.jp/20100925000000');
+		await pickUrlFromRandomYear(['2009', '2010', '2011'], findUrlInYear);
+		expect(findUrlInYear).toHaveBeenCalledTimes(1);
 	});
 });

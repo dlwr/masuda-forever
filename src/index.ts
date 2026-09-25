@@ -5,7 +5,7 @@
  */
 
 import { createClient } from '@libsql/client';
-import { checkArticleStatus, pickLiveArticleUrl } from './shared/article-picker.js';
+import { checkArticleStatus, pickLiveArticleUrl, pickUrlFromRandomYear } from './shared/article-picker.js';
 import { scrapeSinglePageLight } from './shared/scraper.js';
 
 type TursoEnvironment = {
@@ -70,23 +70,21 @@ export default {
 					return new Response('No valid past years found for this date.', { status: 404 });
 				}
 
-				// Select a random year between startYear and endYear (inclusive)
-				const numberOfYears = endYear - startYear + 1;
-				const randomYear = Math.floor(Math.random() * numberOfYears) + startYear;
-				const randomYearString = String(randomYear);
+				const years = Array.from({ length: endYear - startYear + 1 }, (_, index) => String(startYear + index));
 
 				const tursoClient = client;
 				const liveUrl = await pickLiveArticleUrl({
-					async pickRandomUrl() {
-						const result = await tursoClient.execute({
-							sql: `SELECT url FROM article_urls
-							 WHERE url_year = ?1 AND url_monthday = ?2 AND deleted_at IS NULL
-							 ORDER BY RANDOM()
-							 LIMIT 1`,
-							args: [randomYearString, currentMonthDay],
-						});
-						return (result.rows[0] as { url?: string } | undefined)?.url;
-					},
+					pickRandomUrl: () =>
+						pickUrlFromRandomYear(years, async (year) => {
+							const result = await tursoClient.execute({
+								sql: `SELECT url FROM article_urls
+								 WHERE url_year = ?1 AND url_monthday = ?2 AND deleted_at IS NULL
+								 ORDER BY RANDOM()
+								 LIMIT 1`,
+								args: [year, currentMonthDay],
+							});
+							return (result.rows[0] as { url?: string } | undefined)?.url;
+						}),
 					checkStatus: (url) => checkArticleStatus(url),
 					async markDeleted(url) {
 						await tursoClient.execute({

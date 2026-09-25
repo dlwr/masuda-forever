@@ -43,3 +43,17 @@ export async function pickLiveArticleUrl({
 
 	return undefined;
 }
+
+export async function pickUrlFromRandomYear(
+	years: string[],
+	findUrlInYear: (year: string) => Promise<string | undefined | void>,
+): Promise<string | undefined> {
+	const remaining = [...years];
+	while (remaining.length > 0) {
+		const [year] = remaining.splice(Math.floor(Math.random() * remaining.length), 1);
+		const url = await findUrlInYear(year);
+		if (url) return url;
+	}
+
+	return undefined;
+}
