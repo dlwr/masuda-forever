@@ -171,3 +171,14 @@ dist
 .dev.vars
 .wrangler/
 worker-configuration.d.ts
+
+# local sqlite
+*.db
+*.db-shm
+*.db-wal
+
+# claude code
+.claude/settings.local.json
+.claude/plans/
+
+.DS_Store

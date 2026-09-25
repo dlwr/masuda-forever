@@ -1,84 +1,41 @@
 # masuda-forever
 
-anond.hatelabo.jpの記事URLを保全し再利用するためのCloudflare Workersアプリケーション
+はてな匿名ダイアリー（anond.hatelabo.jp）の記事URLとタイトルを Turso に保全し、`/` にアクセスすると「今日と同じ月日」の過去記事へランダムにリダイレクトする Cloudflare Workers アプリ。
 
-## 概要
+## 動作
 
-このプロジェクトは、はてな匿名ダイアリー（anond.hatelabo.jp）の記事URLを保全し、再利用するためのCloudflare Workersアプリケーションです。記事のURLとタイトルをTurso（libSQL）データベースに保存し、過去の記事にランダムでリダイレクトする機能などを提供します。スクレイピングはURL保全のための手段として使用しています。
+- `/`: 今日（JST）と同じ月日の過去記事へ 302 リダイレクト。リダイレクト前に記事を GET し、404（anond 側で削除済み）なら `deleted_at` を付けて選び直す
+- cron（毎分）: トップページ1ページ分の新着記事を保存し、`scrape_progress` に残っている過去日付を1ページずつ埋める
 
-## 機能
-
-- URLの保全：はてな匿名ダイアリーの記事URLとタイトルを収集・保存
-- ランダムリダイレクト：保存された過去の記事にランダムでアクセスできる機能
-- 過去の特定日付の記事URLを取得
-- 日付範囲を指定した記事URLの一括保全
-- 特定の月日（例: 0101）に対して複数年のデータを一括取得
-- 毎分のcronジョブによる自動URL収集
-
-## 技術スタック
-
-- [Cloudflare Workers](https://workers.cloudflare.com/)
-- [Turso](https://turso.tech/) (libSQL/SQLite互換データベース)
-- [TypeScript](https://www.typescriptlang.org/)
-- [Cheerio](https://cheerio.js.org/) (HTMLパース)
-- [Wrangler](https://developers.cloudflare.com/workers/wrangler/) (開発・デプロイツール)
-
-## 開発環境のセットアップ
-
-### 前提条件
-
-- Node.js (最新LTS推奨)
-- npm または yarn
-- Cloudflareアカウント
-
-### インストール
+## セットアップ
 
 ```bash
-# リポジトリをクローン
-git clone https://github.com/yourusername/masuda-forever.git
-cd masuda-forever
-
-# 依存関係のインストール
 npm install
+cp .env.example .env  # TURSO_DB_URL と TURSO_AUTH_TOKEN を設定
 ```
 
-### 環境設定
-
-1. Tursoでデータベースを作成し、URLとAuth Tokenを取得してください。
-2. `wrangler.jsonc` の `TURSO_DB_URL` を設定してください。
-3. `TURSO_AUTH_TOKEN` はシークレットとして設定してください（例: `wrangler secret put TURSO_AUTH_TOKEN`）。ローカル開発時は `.dev.vars` での設定も可能です。
-4. `schema.sql` をTursoに適用してください（Turso CLIまたはダッシュボードのSQL実行機能を使用）。
+本番の `TURSO_DB_URL` と `TURSO_AUTH_TOKEN` は `wrangler secret put` で設定する。スキーマは `schema.sql`、既存DBへの変更は `migrations/` を順に適用する。
 
 ## 開発
 
 ```bash
-# 開発サーバーの起動
-npm run dev
-
-# コードフォーマット
-npm run format
-
-# リント
+npm run dev     # ローカル実行（/__scheduled で cron を試せる）
+npm test
 npm run lint
-```
-
-## デプロイ
-
-```bash
 npm run deploy
 ```
 
-## API エンドポイント
+## CLI
 
-- `/random` - 保存されている記事からランダムに一つ選んでリダイレクト
+`.env` の Turso に対して直接スクレイピングする。
 
-以下のエンドポイントは開発環境でのみ利用可能です：
-
-- `/scrape` - 現在の記事URLを収集
-- `/scrape-historical?date=YYYYMMDD` - 指定日付の記事を収集
-- `/scrape-historical-batch?startDate=YYYYMMDD&endDate=YYYYMMDD&maxDays=N` - 日付範囲の記事を一括収集
-- `/scrape/date/MMDD` - 指定月日の複数年の記事を収集
-- `/scrape/date-range` - 指定した日付範囲の記事を収集
+```bash
+npm run cli scrape -- -m 5                             # 最新記事を5ページ分
+npm run cli scrape-historical -- -d 20240101            # 特定日付
+npm run cli scrape-historical-range -- -s 0101 -e 0105  # 月日範囲を2006年〜今年分
+npm run cli init-progress -- --analyze                  # 欠損日付を scrape_progress に投入
+npm run cli show-progress
+```
 
 ## ライセンス
 

@@ -10,9 +10,6 @@ CREATE TABLE IF NOT EXISTS article_urls (
   deleted_at TIMESTAMP -- anond 側で削除を確認した日時
 );
 
--- urlカラムにインデックスを追加
-CREATE INDEX IF NOT EXISTS idx_article_urls_url ON article_urls (url);
-
 -- 年・月日の複合インデックス（ランダムリダイレクト高速化用）
 CREATE INDEX IF NOT EXISTS idx_article_urls_year_monthday ON article_urls (url_year, url_monthday);
 
