@@ -115,9 +115,7 @@ program
 			`);
 
 			// 既存データを分析するか全日付を投入するか
-			await (options.analyze
-				? initProgressWithAnalysis(client, startYear, endYear)
-				: initProgressAllDates(client, startYear, endYear));
+			await (options.analyze ? initProgressWithAnalysis(client, startYear, endYear) : initProgressAllDates(client, startYear, endYear));
 
 			console.log('初期化完了');
 		} catch (error) {
