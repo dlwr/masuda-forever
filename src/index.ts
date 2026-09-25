@@ -5,6 +5,7 @@
  */
 
 import { createClient } from '@libsql/client';
+import { checkArticleStatus, pickLiveArticleUrl } from './shared/article-picker.js';
 import { scrapeSinglePageLight } from './shared/scraper.js';
 
 type TursoEnvironment = {
@@ -74,20 +75,29 @@ export default {
 				const randomYear = Math.floor(Math.random() * numberOfYears) + startYear;
 				const randomYearString = String(randomYear);
 
-				// Fetch a random article from that specific year and month/day
-				// url_year, url_monthday カラムを使用（インデックスが効く）
-				const result = await client.execute({
-					sql: `SELECT url FROM article_urls
-					 WHERE url_year = ?1 AND url_monthday = ?2
-					 ORDER BY RANDOM()
-					 LIMIT 1`,
-					args: [randomYearString, currentMonthDay],
+				const tursoClient = client;
+				const liveUrl = await pickLiveArticleUrl({
+					async pickRandomUrl() {
+						const result = await tursoClient.execute({
+							sql: `SELECT url FROM article_urls
+							 WHERE url_year = ?1 AND url_monthday = ?2 AND deleted_at IS NULL
+							 ORDER BY RANDOM()
+							 LIMIT 1`,
+							args: [randomYearString, currentMonthDay],
+						});
+						return (result.rows[0] as { url?: string } | undefined)?.url;
+					},
+					checkStatus: (url) => checkArticleStatus(url),
+					async markDeleted(url) {
+						await tursoClient.execute({
+							sql: 'UPDATE article_urls SET deleted_at = CURRENT_TIMESTAMP WHERE url = ?1',
+							args: [url],
+						});
+					},
 				});
 
-				const row = result.rows[0] as { url?: string } | undefined;
-
-				return row?.url
-					? Response.redirect(row.url, 302)
+				return liveUrl
+					? Response.redirect(liveUrl, 302)
 					: new Response('No matching historical article found for this date.', { status: 404 });
 			} catch (error: unknown) {
 				console.error('Error handling root path redirect:', error);
@@ -177,7 +187,9 @@ async function scrapeNextPendingDate(client: TursoClient): Promise<void> {
 				progress.pagesScraped + 1,
 				progress.urlsFound + result.insertedCount,
 			);
-			console.log(`${progress.date}: スクレイピング完了 (${progress.pagesScraped + 1}ページ、${progress.urlsFound + result.insertedCount}件)`);
+			console.log(
+				`${progress.date}: スクレイピング完了 (${progress.pagesScraped + 1}ページ、${progress.urlsFound + result.insertedCount}件)`,
+			);
 		}
 	} catch (error) {
 		console.error(`${progress.date}: スクレイピングエラー`, error);
