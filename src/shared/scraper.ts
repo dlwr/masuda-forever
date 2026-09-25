@@ -297,6 +297,17 @@ export function extractNextPageUrl(html: string): string | undefined {
 }
 
 /**
+ * 記事URL（https://anond.hatelabo.jp/YYYYMMDDHHMMSS）から年と月日を取り出す
+ */
+export function extractUrlDate(url: string): { year: string; monthDay: string } {
+	const dateStart = 'https://anond.hatelabo.jp/'.length;
+	return {
+		year: url.length >= dateStart + 4 ? url.slice(dateStart, dateStart + 4) : '',
+		monthDay: url.length >= dateStart + 8 ? url.slice(dateStart + 4, dateStart + 8) : '',
+	};
+}
+
+/**
  * バッチ挿入（複数URLを1回のSQLで挿入、CPU時間とDB往復を削減）
  */
 export async function batchInsertUrls(client: Client, articles: ArticleURL[]): Promise<number> {
@@ -306,11 +317,8 @@ export async function batchInsertUrls(client: Client, articles: ArticleURL[]): P
 	// url_year, url_monthday を同時に挿入（URLから抽出）
 	const placeholders = articles.map(() => '(?, ?, ?, ?)').join(', ');
 	const sqlArguments = articles.flatMap((a) => {
-		// URL形式: https://anond.hatelabo.jp/YYYYMMDDHHMMSS
-		// 位置27から4文字が年（YYYY）、位置31から4文字が月日（MMDD）
-		const urlYear = a.url.length >= 31 ? a.url.slice(27, 31) : '';
-		const urlMonthDay = a.url.length >= 35 ? a.url.slice(31, 35) : '';
-		return [a.url, a.title, urlYear, urlMonthDay];
+		const { year, monthDay } = extractUrlDate(a.url);
+		return [a.url, a.title, year, monthDay];
 	});
 
 	const result = await client.execute({
