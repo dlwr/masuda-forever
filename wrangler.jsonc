@@ -50,11 +50,16 @@
 	 */
 	// "services": [{ "binding": "MY_SERVICE", "service": "my-service" }]
 
+	"kv_namespaces": [{ "binding": "CANDIDATES", "id": "2c9de6bbb44841d9bfd5b1286d659190" }],
+	"ratelimits": [{ "name": "RATE_LIMITER", "namespace_id": "1001", "simple": { "limit": 120, "period": 60 } }],
+
 	"env": {
 		"dev": {
 			"vars": {
 				"IS_DEVELOPMENT": true,
 			},
+			"kv_namespaces": [{ "binding": "CANDIDATES", "id": "2c9de6bbb44841d9bfd5b1286d659190" }],
+			"ratelimits": [{ "name": "RATE_LIMITER", "namespace_id": "1001", "simple": { "limit": 120, "period": 60 } }],
 		},
 	},
 }

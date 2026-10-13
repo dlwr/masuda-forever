@@ -5,13 +5,20 @@
  */
 
 import { createClient } from '@libsql/client';
-import { checkArticleStatus, pickLiveArticleUrl, pickUrlFromRandomYear } from './shared/article-picker.js';
-import { isMirroredPath, mirror } from './shared/mirror.js';
+import { checkArticleStatus, pickLiveArticleUrl } from './shared/article-picker.js';
+import { buildCandidates, candidateDay, forgetCandidate, loadCandidates } from './shared/candidate-store.js';
+import { pickCandidatePath } from './shared/candidates.js';
+import { isArticlePath, isMirroredPath, mirror } from './shared/mirror.js';
 import { scrapeSinglePageLight } from './shared/scraper.js';
 
 type TursoEnvironment = {
 	TURSO_DB_URL: string;
 	TURSO_AUTH_TOKEN: string;
+};
+
+type Environment = TursoEnvironment & {
+	CANDIDATES: KVNamespace;
+	RATE_LIMITER: RateLimit;
 };
 
 type TursoClient = ReturnType<typeof createClient>;
@@ -43,41 +50,77 @@ function createTursoClient(environment: TursoEnvironment): TursoClient {
 	});
 }
 
-export default {
-	async fetch(request: Request, environment: TursoEnvironment): Promise<Response> {
-		const url = new URL(request.url);
-		// ルートURL: 日付に基づいてランダムな過去記事へリダイレクト
-		if (url.pathname === '/' || url.pathname === '/random') {
-			let client: TursoClient | undefined;
-			try {
-				client = createTursoClient(environment);
-				const liveUrl = await pickTodayArticleUrl(client);
-				if (!liveUrl) return new Response('No matching historical article found for this date.', { status: 404 });
+const NEXT_BATCH_SIZE = 20;
 
-				return url.pathname === '/random'
-					? Response.redirect(new URL(new URL(liveUrl).pathname, url).href, 302)
-					: Response.redirect(liveUrl, 302);
-			} catch (error: unknown) {
-				console.error('Error handling root path redirect:', error);
-				const errorMessage = error instanceof Error ? error.message : String(error);
-				return new Response(JSON.stringify({ error: `Failed to process redirect: ${errorMessage}` }), {
-					status: 500,
-					headers: { 'Content-Type': 'application/json' },
-				});
-			} finally {
-				client?.close();
-			}
-		}
+const ROBOTS_TXT = 'User-agent: *\nDisallow: /\n';
+
+export default {
+	async fetch(request: Request, environment: Environment, context: ExecutionContext): Promise<Response> {
+		const url = new URL(request.url);
+		if (url.pathname === '/robots.txt') return new Response(ROBOTS_TXT);
+
+		const { success } = await environment.RATE_LIMITER.limit({ key: request.headers.get('cf-connecting-ip') ?? '' });
+		if (!success) return new Response('Too Many Requests', { status: 429, headers: { 'Retry-After': '60' } });
 
 		if (request.method === 'GET' && isMirroredPath(url.pathname)) {
-			return mirror(url.pathname, url.search);
+			const response = await mirror(url.pathname, url.search);
+			if (response.status === 404 && isArticlePath(url.pathname)) {
+				forgetCandidate(candidateDay(convertToJST(new Date())), url.pathname);
+				context.waitUntil(markDeleted(environment, `https://anond.hatelabo.jp${url.pathname}`));
+			}
+			return response;
 		}
 
-		return new Response('MasudaForever: anond.hatelabo.jp URL Archiver');
+		if (url.pathname !== '/' && url.pathname !== '/random' && url.pathname !== '/api/next') {
+			return new Response('MasudaForever: anond.hatelabo.jp URL Archiver');
+		}
+
+		try {
+			const day = candidateDay(convertToJST(new Date()));
+			const candidates = await loadCandidates(environment.CANDIDATES, day, (years, monthDay) =>
+				queryCandidateUrls(environment, years, monthDay),
+			);
+
+			if (url.pathname === '/api/next') {
+				const paths = Array.from({ length: NEXT_BATCH_SIZE }, () => pickCandidatePath(candidates, day.monthDay)).filter(
+					(path) => path !== undefined,
+				);
+				return Response.json(paths, { headers: { 'Cache-Control': 'no-store' } });
+			}
+
+			if (url.pathname === '/random') {
+				const path = pickCandidatePath(candidates, day.monthDay);
+				return path
+					? Response.redirect(new URL(path, url).href, 302)
+					: new Response('No matching historical article found for this date.', { status: 404 });
+			}
+
+			const liveUrl = await pickLiveArticleUrl({
+				pickRandomUrl: async () => {
+					const path = pickCandidatePath(candidates, day.monthDay);
+					return path && `https://anond.hatelabo.jp${path}`;
+				},
+				checkStatus: (articleUrl) => checkArticleStatus(articleUrl),
+				async markDeleted(articleUrl) {
+					forgetCandidate(day, new URL(articleUrl).pathname);
+					await markDeleted(environment, articleUrl);
+				},
+			});
+			return liveUrl
+				? Response.redirect(liveUrl, 302)
+				: new Response('No matching historical article found for this date.', { status: 404 });
+		} catch (error: unknown) {
+			console.error('Error handling root path redirect:', error);
+			const errorMessage = error instanceof Error ? error.message : String(error);
+			return new Response(JSON.stringify({ error: `Failed to process redirect: ${errorMessage}` }), {
+				status: 500,
+				headers: { 'Content-Type': 'application/json' },
+			});
+		}
 	},
 
 	// スケジュールされたジョブ
-	async scheduled(controller: ScheduledController, environment: TursoEnvironment): Promise<void> {
+	async scheduled(controller: ScheduledController, environment: Environment): Promise<void> {
 		console.log(`スクレイピング実行: ${controller.cron}`);
 
 		let client: TursoClient | undefined;
@@ -93,7 +136,15 @@ export default {
 				console.error(`最新記事スクレイピングエラー: ${errorMessage}`);
 			}
 
-			// 2. 過去日付の埋め合わせ（1ページのみ）
+			// 2. 今日と明日の候補一覧を KV に用意する
+			try {
+				await prepareCandidates(environment);
+			} catch (error: unknown) {
+				const errorMessage = error instanceof Error ? error.message : String(error);
+				console.error(`候補一覧の準備エラー: ${errorMessage}`);
+			}
+
+			// 3. 過去日付の埋め合わせ（1ページのみ）
 			try {
 				await scrapeNextPendingDate(client);
 			} catch (error: unknown) {
@@ -107,46 +158,51 @@ export default {
 			client?.close();
 		}
 	},
-} satisfies ExportedHandler<TursoEnvironment>;
+} satisfies ExportedHandler<Environment>;
 
-async function pickTodayArticleUrl(client: TursoClient): Promise<string | undefined> {
+async function queryCandidateUrls(environment: TursoEnvironment, years: string[], monthDay: string): Promise<string[]> {
+	if (years.length === 0) return [];
+
+	const client = createTursoClient(environment);
+	try {
+		const result = await client.execute({
+			sql: `SELECT url FROM article_urls
+			 WHERE url_year IN (${years.map(() => '?').join(', ')}) AND url_monthday = ? AND deleted_at IS NULL`,
+			args: [...years, monthDay],
+		});
+		return result.rows.map((row) => String(row.url));
+	} finally {
+		client.close();
+	}
+}
+
+async function markDeleted(environment: TursoEnvironment, url: string): Promise<void> {
+	const client = createTursoClient(environment);
+	try {
+		await client.execute({
+			sql: 'UPDATE article_urls SET deleted_at = CURRENT_TIMESTAMP WHERE url = ?1 AND deleted_at IS NULL',
+			args: [url],
+		});
+	} finally {
+		client.close();
+	}
+}
+
+async function prepareCandidates(environment: Environment): Promise<void> {
 	const now = convertToJST(new Date());
-	const month = String(now.getMonth() + 1).padStart(2, '0'); // 01-12
-	const day = String(now.getDate()).padStart(2, '0'); // 01-31
-	const currentYear = now.getFullYear(); // YYYY (as number)
-	const currentMonthDay = `${month}${day}`; // Month and Day (e.g., 0410)
+	if (now.getUTCMinutes() % 10 !== 0) return;
 
-	// Determine the start year based on the current date
-	const monthNumber = now.getMonth() + 1; // 1-12
-	const dayNumber = now.getDate(); // 1-31
+	for (const date of [now, new Date(now.getTime() + 24 * 60 * 60 * 1000)]) {
+		const day = candidateDay(date);
+		const stored = await environment.CANDIDATES.get(day.key, 'stream');
+		if (stored) {
+			await stored.cancel();
+			continue;
+		}
 
-	const startYear = monthNumber > 9 || (monthNumber === 9 && dayNumber >= 24) ? 2006 : 2007;
-
-	// Determine the end year (last year)
-	const endYear = currentYear - 1;
-
-	const years = Array.from({ length: Math.max(0, endYear - startYear + 1) }, (_, index) => String(startYear + index));
-
-	return pickLiveArticleUrl({
-		pickRandomUrl: () =>
-			pickUrlFromRandomYear(years, async (year) => {
-				const result = await client.execute({
-					sql: `SELECT url FROM article_urls
-					 WHERE url_year = ?1 AND url_monthday = ?2 AND deleted_at IS NULL
-					 ORDER BY RANDOM()
-					 LIMIT 1`,
-					args: [year, currentMonthDay],
-				});
-				return (result.rows[0] as { url?: string } | undefined)?.url;
-			}),
-		checkStatus: (url) => checkArticleStatus(url),
-		async markDeleted(url) {
-			await client.execute({
-				sql: 'UPDATE article_urls SET deleted_at = CURRENT_TIMESTAMP WHERE url = ?1',
-				args: [url],
-			});
-		},
-	});
+		await buildCandidates(environment.CANDIDATES, day, (years, monthDay) => queryCandidateUrls(environment, years, monthDay));
+		console.log(`候補一覧を作成: ${day.key}`);
+	}
 }
 
 /**
