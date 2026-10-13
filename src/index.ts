@@ -6,6 +6,7 @@
 
 import { createClient } from '@libsql/client';
 import { checkArticleStatus, pickLiveArticleUrl, pickUrlFromRandomYear } from './shared/article-picker.js';
+import { isMirroredPath, mirror } from './shared/mirror.js';
 import { scrapeSinglePageLight } from './shared/scraper.js';
 
 type TursoEnvironment = {
@@ -46,57 +47,16 @@ export default {
 	async fetch(request: Request, environment: TursoEnvironment): Promise<Response> {
 		const url = new URL(request.url);
 		// ルートURL: 日付に基づいてランダムな過去記事へリダイレクト
-		if (url.pathname === '/') {
+		if (url.pathname === '/' || url.pathname === '/random') {
 			let client: TursoClient | undefined;
 			try {
 				client = createTursoClient(environment);
-				const now = convertToJST(new Date());
-				const month = String(now.getMonth() + 1).padStart(2, '0'); // 01-12
-				const day = String(now.getDate()).padStart(2, '0'); // 01-31
-				const currentYear = now.getFullYear(); // YYYY (as number)
-				const currentMonthDay = `${month}${day}`; // Month and Day (e.g., 0410)
+				const liveUrl = await pickTodayArticleUrl(client);
+				if (!liveUrl) return new Response('No matching historical article found for this date.', { status: 404 });
 
-				// Determine the start year based on the current date
-				const monthNumber = now.getMonth() + 1; // 1-12
-				const dayNumber = now.getDate(); // 1-31
-
-				const startYear = monthNumber > 9 || (monthNumber === 9 && dayNumber >= 24) ? 2006 : 2007;
-
-				// Determine the end year (last year)
-				const endYear = currentYear - 1;
-
-				// Check if there are any valid past years to select from
-				if (startYear > endYear) {
-					return new Response('No valid past years found for this date.', { status: 404 });
-				}
-
-				const years = Array.from({ length: endYear - startYear + 1 }, (_, index) => String(startYear + index));
-
-				const tursoClient = client;
-				const liveUrl = await pickLiveArticleUrl({
-					pickRandomUrl: () =>
-						pickUrlFromRandomYear(years, async (year) => {
-							const result = await tursoClient.execute({
-								sql: `SELECT url FROM article_urls
-								 WHERE url_year = ?1 AND url_monthday = ?2 AND deleted_at IS NULL
-								 ORDER BY RANDOM()
-								 LIMIT 1`,
-								args: [year, currentMonthDay],
-							});
-							return (result.rows[0] as { url?: string } | undefined)?.url;
-						}),
-					checkStatus: (url) => checkArticleStatus(url),
-					async markDeleted(url) {
-						await tursoClient.execute({
-							sql: 'UPDATE article_urls SET deleted_at = CURRENT_TIMESTAMP WHERE url = ?1',
-							args: [url],
-						});
-					},
-				});
-
-				return liveUrl
-					? Response.redirect(liveUrl, 302)
-					: new Response('No matching historical article found for this date.', { status: 404 });
+				return url.pathname === '/random'
+					? Response.redirect(new URL(new URL(liveUrl).pathname, url).href, 302)
+					: Response.redirect(liveUrl, 302);
 			} catch (error: unknown) {
 				console.error('Error handling root path redirect:', error);
 				const errorMessage = error instanceof Error ? error.message : String(error);
@@ -107,6 +67,10 @@ export default {
 			} finally {
 				client?.close();
 			}
+		}
+
+		if (request.method === 'GET' && isMirroredPath(url.pathname)) {
+			return mirror(url.pathname, url.search);
 		}
 
 		return new Response('MasudaForever: anond.hatelabo.jp URL Archiver');
@@ -144,6 +108,46 @@ export default {
 		}
 	},
 } satisfies ExportedHandler<TursoEnvironment>;
+
+async function pickTodayArticleUrl(client: TursoClient): Promise<string | undefined> {
+	const now = convertToJST(new Date());
+	const month = String(now.getMonth() + 1).padStart(2, '0'); // 01-12
+	const day = String(now.getDate()).padStart(2, '0'); // 01-31
+	const currentYear = now.getFullYear(); // YYYY (as number)
+	const currentMonthDay = `${month}${day}`; // Month and Day (e.g., 0410)
+
+	// Determine the start year based on the current date
+	const monthNumber = now.getMonth() + 1; // 1-12
+	const dayNumber = now.getDate(); // 1-31
+
+	const startYear = monthNumber > 9 || (monthNumber === 9 && dayNumber >= 24) ? 2006 : 2007;
+
+	// Determine the end year (last year)
+	const endYear = currentYear - 1;
+
+	const years = Array.from({ length: Math.max(0, endYear - startYear + 1) }, (_, index) => String(startYear + index));
+
+	return pickLiveArticleUrl({
+		pickRandomUrl: () =>
+			pickUrlFromRandomYear(years, async (year) => {
+				const result = await client.execute({
+					sql: `SELECT url FROM article_urls
+					 WHERE url_year = ?1 AND url_monthday = ?2 AND deleted_at IS NULL
+					 ORDER BY RANDOM()
+					 LIMIT 1`,
+					args: [year, currentMonthDay],
+				});
+				return (result.rows[0] as { url?: string } | undefined)?.url;
+			}),
+		checkStatus: (url) => checkArticleStatus(url),
+		async markDeleted(url) {
+			await client.execute({
+				sql: 'UPDATE article_urls SET deleted_at = CURRENT_TIMESTAMP WHERE url = ?1',
+				args: [url],
+			});
+		},
+	});
+}
 
 /**
  * 次に処理すべき日付を取得して1ページスクレイピング
