@@ -64,7 +64,7 @@ export default {
 
 		if (request.method === 'GET' && isMirroredPath(url.pathname)) {
 			const response = await mirror(url.pathname, url.search);
-			if (response.status === 404 && isArticlePath(url.pathname)) {
+			if (response.status === 404 && isArticlePath(url.pathname) && url.search === '') {
 				forgetCandidate(candidateDay(convertToJST(new Date())), url.pathname);
 				context.waitUntil(markDeleted(environment, `https://anond.hatelabo.jp${url.pathname}`));
 			}
