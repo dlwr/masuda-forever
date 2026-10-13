@@ -10,7 +10,8 @@ anond.hatelabo.jp の記事URLを Turso に保全し、`/` で今日と同じ月
 
 ## 構成
 
-- `src/index.ts`: Workers エントリ。`fetch` が `/` のリダイレクト、`scheduled`（毎分）が新着取得と `scrape_progress` による過去日付の埋め合わせ
+- `src/index.ts`: Workers エントリ。`fetch` が `/` のリダイレクトと `/random`・ミラーの中継、`scheduled`（毎分）が新着取得と `scrape_progress` による過去日付の埋め合わせ
+- `src/shared/mirror.ts`: `/random` の遷移先ミラー。記事と `/assets/*` だけ中継し、HTMLRewriter でバナー・スクリプトを差し込み、記事以外のリンクは本家に向ける。anond の JS がルート相対パス（`/<id>?mode=json` など）を叩くので、パスは anond と同じに保つ
 - `src/shared/article-picker.ts`: リダイレクト先の選択。年をランダムな順に探し、記事を GET して 404 なら `deleted_at` を付けて選び直す（最大3回）
 - `src/shared/scraper.ts`: スクレイピング。Workers は正規表現パーサー（`extractArticlesWithRegex`）、CLI の一部は cheerio
 - `src/shared/database.ts`: CLI 用の Turso 接続
