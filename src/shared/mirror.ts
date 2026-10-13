@@ -37,6 +37,9 @@ const STYLE = `<style>
 #mf-banner a{color:#fff;text-decoration:underline}
 #mf-banner .mf-actions{display:flex;gap:12px;align-items:center}
 #mf-next{border:1px solid #fff;background:transparent;color:#fff;font:bold 14px sans-serif;padding:4px 10px;border-radius:3px;cursor:pointer}
+#mf-guide{display:flex;flex-wrap:wrap;gap:4px 12px;align-items:center;padding:8px 12px;background:#fbe9e7;color:#5f1410;border-bottom:1px solid #e6b8b3;font:13px/1.6 sans-serif}
+#mf-guide a{color:#b3261e;font-weight:bold}
+#mf-copy{border:1px solid #b3261e;background:#fff;color:#b3261e;font:13px sans-serif;padding:2px 8px;border-radius:3px;cursor:pointer}
 #mf-pull{margin:24px 0 0;padding:40px 12px 120px;text-align:center;font:14px/1.6 sans-serif;color:#666;border-top:4px solid #b3261e;background:linear-gradient(to right,#f2d4d1 var(--mf-progress,0%),transparent var(--mf-progress,0%))}
 </style>`;
 
@@ -77,6 +80,15 @@ const SCRIPT = `<script>
 		storage((s) => s.removeItem(SKIP_KEY));
 	}
 	document.getElementById('mf-next').addEventListener('click', next);
+	const copy = document.getElementById('mf-copy');
+	copy.addEventListener('click', async () => {
+		try {
+			await navigator.clipboard.writeText(location.origin + '/random');
+			copy.textContent = 'コピーしました';
+		} catch {
+			copy.textContent = location.origin + '/random';
+		}
+	});
 	const pull = document.getElementById('mf-pull');
 	const THRESHOLD = 600;
 	let pulled = 0;
@@ -109,6 +121,10 @@ function banner(originalUrl: string, missing: boolean): string {
 	return `<div id="mf-banner"${missing ? ' data-missing="1"' : ''}>
 <span>これは masuda-forever による非公式ミラーです（はてな匿名ダイアリー本家ではありません）</span>
 <span class="mf-actions"><a href="${originalUrl}">本家で開く</a><button type="button" id="mf-next">次のmasuda</button></span>
+</div>
+<div id="mf-guide">
+<span>このページのURLは記事ごとに変わります。ブックマークするなら <a href="/random" title="ブックマークバーにドラッグして登録できます">今日のmasuda</a> のリンクを登録してください（開くたびに今日と同じ日付の過去記事が出ます）</span>
+<button type="button" id="mf-copy">URLをコピー</button>
 </div>`;
 }
 
