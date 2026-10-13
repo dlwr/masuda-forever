@@ -1,3 +1,5 @@
+import { ARTICLE_FETCH_CACHE } from './mirror.js';
+
 export type ArticleStatus = 'alive' | 'deleted' | 'unknown';
 
 type Fetcher = (url: string, init?: RequestInit) => Promise<Response>;
@@ -13,8 +15,9 @@ export async function checkArticleStatus(url: string, fetcher: Fetcher = fetch):
 		const response = await fetcher(url, {
 			headers: { 'User-Agent': 'masuda-forever-bot' },
 			signal: AbortSignal.timeout(CHECK_TIMEOUT_MS),
+			cf: ARTICLE_FETCH_CACHE,
 		});
-		await response.body?.cancel();
+		await response.arrayBuffer();
 		if (response.status === 404) return 'deleted';
 		if (response.ok) return 'alive';
 		console.warn(`記事の生存確認で想定外のステータス: ${response.status} ${url}`);
@@ -39,20 +42,6 @@ export async function pickLiveArticleUrl({
 		if (!url) return undefined;
 		if ((await checkStatus(url)) !== 'deleted') return url;
 		await markDeleted(url);
-	}
-
-	return undefined;
-}
-
-export async function pickUrlFromRandomYear(
-	years: string[],
-	findUrlInYear: (year: string) => Promise<string | undefined | void>,
-): Promise<string | undefined> {
-	const remaining = [...years];
-	while (remaining.length > 0) {
-		const [year] = remaining.splice(Math.floor(Math.random() * remaining.length), 1);
-		const url = await findUrlInYear(year);
-		if (url) return url;
 	}
 
 	return undefined;

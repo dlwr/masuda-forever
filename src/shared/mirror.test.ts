@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isMirroredPath, rewriteHref } from './mirror.js';
+import { isMirroredPath, rewriteHref, rewriteStaticAssetUrl } from './mirror.js';
 
 describe('isMirroredPath', () => {
 	it('記事パスは中継する', () => {
@@ -52,5 +52,17 @@ describe('rewriteHref', () => {
 
 	it('プロトコル相対URLはそのまま', () => {
 		expect(rewriteHref('//www.googletagmanager.com/ns.html')).toBe('//www.googletagmanager.com/ns.html');
+	});
+});
+
+describe('rewriteStaticAssetUrl', () => {
+	it('assets は本家から直接読ませる', () => {
+		expect(rewriteStaticAssetUrl('/assets/main-CW36ffMW.css')).toBe('https://anond.hatelabo.jp/assets/main-CW36ffMW.css');
+	});
+
+	it('assets 以外はそのまま', () => {
+		expect(rewriteStaticAssetUrl('https://b.st-hatena.com/images/entry-button/button-only@2x.png')).toBe(
+			'https://b.st-hatena.com/images/entry-button/button-only@2x.png',
+		);
 	});
 });
