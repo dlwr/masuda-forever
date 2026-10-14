@@ -100,6 +100,11 @@ const SCRIPT = `<script>
 		if (pulled >= THRESHOLD) next();
 	};
 	const reset = () => add(-pulled);
+	addEventListener('pageshow', (event) => {
+		if (!event.persisted) return;
+		moving = false;
+		reset();
+	});
 	addEventListener('wheel', (event) => (atBottom() && event.deltaY > 0 ? add(event.deltaY) : reset()), { passive: true });
 	addEventListener('touchstart', (event) => (touchY = event.touches[0].clientY), { passive: true });
 	addEventListener('touchmove', (event) => {
