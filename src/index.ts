@@ -6,7 +6,7 @@
 
 import { createClient } from '@libsql/client';
 import { checkArticleStatus, pickLiveArticleUrl } from './shared/article-picker.js';
-import { buildCandidates, candidateDay, forgetCandidate, loadCandidates } from './shared/candidate-store.js';
+import { buildCandidates, type CandidateDay, candidateDay, forgetCandidate, loadCandidates } from './shared/candidate-store.js';
 import { pickCandidatePath } from './shared/candidates.js';
 import { isArticlePath, isMirroredPath, mirror } from './shared/mirror.js';
 import { scrapeSinglePageLight } from './shared/scraper.js';
@@ -64,11 +64,20 @@ export default {
 
 		if (request.method === 'GET' && isMirroredPath(url.pathname)) {
 			const response = await mirror(url.pathname, url.search);
-			if (response.status === 404 && isArticlePath(url.pathname) && url.search === '') {
-				forgetCandidate(candidateDay(convertToJST(new Date())), url.pathname);
-				context.waitUntil(markDeleted(environment, `https://anond.hatelabo.jp${url.pathname}`));
+			if (response.status !== 404 || !isArticlePath(url.pathname) || url.search !== '') return response;
+
+			const day = candidateDay(convertToJST(new Date()));
+			forgetCandidate(day, url.pathname);
+			context.waitUntil(markDeleted(environment, `https://anond.hatelabo.jp${url.pathname}`));
+			try {
+				const liveUrl = await pickLiveUrl(environment, day);
+				if (!liveUrl) return response;
+				await response.body?.cancel();
+				return Response.redirect(new URL(new URL(liveUrl).pathname, url).href, 302);
+			} catch (error: unknown) {
+				console.error('削除済み記事の代わりを選べませんでした:', error);
+				return response;
 			}
-			return response;
 		}
 
 		if (url.pathname !== '/' && url.pathname !== '/random' && url.pathname !== '/api/next') {
@@ -95,17 +104,7 @@ export default {
 					: new Response('No matching historical article found for this date.', { status: 404 });
 			}
 
-			const liveUrl = await pickLiveArticleUrl({
-				pickRandomUrl: async () => {
-					const path = pickCandidatePath(candidates, day.monthDay);
-					return path && `https://anond.hatelabo.jp${path}`;
-				},
-				checkStatus: (articleUrl) => checkArticleStatus(articleUrl),
-				async markDeleted(articleUrl) {
-					forgetCandidate(day, new URL(articleUrl).pathname);
-					await markDeleted(environment, articleUrl);
-				},
-			});
+			const liveUrl = await pickLiveUrl(environment, day);
 			return liveUrl
 				? Response.redirect(liveUrl, 302)
 				: new Response('No matching historical article found for this date.', { status: 404 });
@@ -174,6 +173,23 @@ async function queryCandidateUrls(environment: TursoEnvironment, years: string[]
 	} finally {
 		client.close();
 	}
+}
+
+async function pickLiveUrl(environment: Environment, day: CandidateDay): Promise<string | undefined> {
+	return pickLiveArticleUrl({
+		pickRandomUrl: async () => {
+			const candidates = await loadCandidates(environment.CANDIDATES, day, (years, monthDay) =>
+				queryCandidateUrls(environment, years, monthDay),
+			);
+			const path = pickCandidatePath(candidates, day.monthDay);
+			return path && `https://anond.hatelabo.jp${path}`;
+		},
+		checkStatus: (articleUrl) => checkArticleStatus(articleUrl),
+		async markDeleted(articleUrl) {
+			forgetCandidate(day, new URL(articleUrl).pathname);
+			await markDeleted(environment, articleUrl);
+		},
+	});
 }
 
 async function markDeleted(environment: TursoEnvironment, url: string): Promise<void> {
